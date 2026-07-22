@@ -155,14 +155,27 @@ def make_logger(config):
   step = embodied.Counter()
   logdir = config.logdir
   multiplier = config.env.get(config.task.split('_')[0], {}).get('repeat', 1)
-  logger = embodied.Logger(step, [
+  loggers = [
       embodied.logger.TerminalOutput(config.filter, 'Agent'),
       embodied.logger.JSONLOutput(logdir, 'metrics.jsonl'),
       embodied.logger.JSONLOutput(logdir, 'scores.jsonl', 'episode/score'),
       embodied.logger.TensorBoardOutput(
           logdir, config.run.log_video_fps, config.tensorboard_videos),
-      embodied.logger.WandBOutput(config.task, project="dreamerv3_LEQ", config=dict(config)),
-  ], multiplier)
+  ]
+  # Same knobs as LEQ/train/train_LEQ.py: project / name / key / enable(debug).
+  if config.wandb.enable and config.run.script != 'eval_only':
+    import wandb
+    if config.wandb.key:
+      wandb.login(key=config.wandb.key)
+    wandb_name = (
+        config.wandb.name
+        or f'{config.algo}_{config.task}_{config.seed}')
+    loggers.append(embodied.logger.WandBOutput(
+        wandb_name,
+        project=config.wandb.project,
+        config=dict(config),
+    ))
+  logger = embodied.Logger(step, loggers, multiplier)
   return logger
 
 def make_replay(config, directory=None, is_eval=False, rate_limit=False):

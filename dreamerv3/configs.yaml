@@ -9,6 +9,14 @@ defaults:
   filter: 'score|length|fps|ratio|train/.*_loss$|train/rand/.*/mean|report/.*/mean|eval/.*/mean'
   tensorboard_videos: True
 
+  # WandB logging (mirrors LEQ/train/train_LEQ.py flags).
+  # Disable with --wandb.enable False (or use the debug config).
+  wandb:
+    enable: True
+    project: dreamerv3_LEQ
+    name: ''  # default: {algo}_{task}_{seed}
+    key: ''   # optional; otherwise uses WANDB_API_KEY / cached login
+
   replay:
     size: 5e6
     online: False
@@ -371,6 +379,7 @@ debug:
   jax: {debug: True, jit: True, profiler: False, checks: False}
   wrapper: {length: 100, checks: True}
   run: {num_envs: 4, eval_every: 10, log_every: 5, save_every: 15, actor_batch: 2, driver_parallel: False}
+  wandb: {enable: False}
   report_gradnorms: False
   batch_size: 4
   batch_length: 12

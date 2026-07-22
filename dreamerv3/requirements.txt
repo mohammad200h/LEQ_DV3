@@ -4,3 +4,5 @@ jax[cuda12_pip]
 jaxlib
 optax
 tensorflow_probability
+wandb
+wandb

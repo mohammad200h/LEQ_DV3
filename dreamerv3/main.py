@@ -187,10 +187,19 @@ def make_logger(config):
       #embodied.logger.TensorBoardOutput(
       #    logdir, config.run.log_video_fps, config.tensorboard_videos),
   ]
-  if config.run.script != 'eval_only':
-    loggers.append(
-      embodied.logger.WandBOutput(config.task + "_" + config.algo, project="dreamerv3_LEQ", config=dict(config))
-    )
+  # Same knobs as LEQ/train/train_LEQ.py: project / name / key / enable(debug).
+  if config.wandb.enable and config.run.script != 'eval_only':
+    import wandb
+    if config.wandb.key:
+      wandb.login(key=config.wandb.key)
+    wandb_name = (
+        config.wandb.name
+        or f'{config.algo}_{config.task}_{config.seed}')
+    loggers.append(embodied.logger.WandBOutput(
+        wandb_name,
+        project=config.wandb.project,
+        config=dict(config),
+    ))
   logger = embodied.Logger(step, loggers, multiplier)
   return logger
 

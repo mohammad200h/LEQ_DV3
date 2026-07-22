@@ -12,10 +12,10 @@ hostname
 df .
 
 conda activate IQL
-export WANDB_API_KEY=930383537a9a33cf8395f767553809f606c9bab0
+export WANDB_API_KEY=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
 ps -eo nlwp | tail -n +2 | awk '{ num_threads += $1 } END { print num_threads }'
 #rm -r logdir/$ALGO/$TASK/$EXPECTILE/$SEED/
 echo "CUDA_VISIBLE_DEVICES=$GPU WANDB__SERVICE_WAIT=3000 python dreamerv3/main.py --logdir logdir/$ALGO/$TASK/$EXPECTILE/$SEED --configs $SUITE --task $TASK --algo $ALGO --seed $SEED --expectile $EXPECTILE"
-XLA_PYTHON_CLIENT_MEM_FRACTION=.90 CUDA_VISIBLE_DEVICES=$GPU WANDB__SERVICE_WAIT=3000 python dreamerv3/main.py --logdir logdir/$ALGO/$TASK/$EXPECTILE/$SEED --configs $SUITE --task $TASK --algo $ALGO --seed $SEED --expectile $EXPECTILE --run.model_checkpoint pretrained_model/12m/$TASK/0/${SEED}/checkpoint.ckpt
+XLA_PYTHON_CLIENT_MEM_FRACTION=.90 CUDA_VISIBLE_DEVICES=$GPU WANDB__SERVICE_WAIT=3000 python3 dreamerv3/main.py --logdir logdir/$ALGO/$TASK/$EXPECTILE/$SEED --configs $SUITE --task $TASK --algo $ALGO --seed $SEED --expectile $EXPECTILE --run.model_checkpoint logdir/model/$TASK/0/${SEED}/checkpoint.ckpt
 
 #--run.model_checkpoint logdir/model/$TASK/$SEED/checkpoint.ckpt 
