@@ -238,6 +238,17 @@ def make_replay(config, directory=None, is_eval=False, rate_limit=False):
   suite, task = config.task.split('_', 1)
   if '-' in task: task, diff = task.split('-', 1)
   else: diff = None
+  fnames = []
+  if suite == 'leap':
+    fnames = glob.glob(os.path.join(os.getcwd(), f'data/leap/{task}/*.npz'))
+    print(f'data/leap/{task}/*.npz')
+    print(fnames)
+    if not fnames:
+      raise FileNotFoundError(
+          f'No DreamerV3 chunks in data/leap/{task}/. Collect episodes with '
+          'sparsh-skin-sim/data_collection/data_collection.py, then run '
+          'python data/leap/convert_episodes.py --input <collection_dir> '
+          f'--output data/leap/{task}')
   if suite == 'atari5p':
     fnames = glob.glob(os.path.join(os.getcwd(), f'data/dv3_5p/{task}/*.npz'))
   if suite == 'atari1p':
@@ -325,6 +336,7 @@ def make_score(config):
       return (lambda x: x * 10.)
   if 'atari' in suite:
       return (lambda x: x)
+  return (lambda x: x)
 
 def make_env(config, index, **overrides):
   suite, task = config.task.split('_', 1)
@@ -353,6 +365,7 @@ def make_env(config, index, **overrides):
       'langroom': 'embodied.envs.langroom:LangRoom',
       'procgen': 'embodied.envs.procgen:ProcGen',
       'bsuite': 'embodied.envs.bsuite:BSuite',
+      'leap': 'embodied.envs.leap:Leap',
       'memmaze': lambda task, **kw: from_gym.FromGym(
           f'MemoryMaze-{task}-ExtraObs-v0', **kw),
   }[suite]

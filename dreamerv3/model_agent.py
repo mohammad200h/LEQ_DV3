@@ -277,6 +277,10 @@ class Agent(nj.Module):
     metrics.update(mets)
     replay_outs = {k: v for (k, v) in outs.items()}
 
+    for k in self.dec.veckeys:
+      metrics[f'{k}_mse'] = jnp.square(
+          dists[k].mode() - f32(data[k])).mean()
+
     # Metrics
     metrics.update({f'{k}_loss': v.mean() for k, v in losses.items()})
     metrics.update({f'{k}_loss_std': v.std() for k, v in losses.items()})
@@ -328,6 +332,12 @@ class Agent(nj.Module):
     data_img = {k: v[:, num_obs:] for k, v in data.items()}
     losses = {k: -v.log_prob(data_img[k].astype(f32)) for k, v in img.items()}
     metrics.update({f'openl_{k}_loss': v.mean() for k, v in losses.items()})
+    data_rec = {k: v[:, :num_obs] for k, v in data.items()}
+    for key in self.dec.veckeys:
+      metrics[f'recon_{key}_mse'] = jnp.square(
+          rec[key].mode() - f32(data_rec[key])).mean()
+      metrics[f'openl_{key}_mse'] = jnp.square(
+          img[key].mode() - f32(data_img[key])).mean()
     stats = jaxutils.balance_stats(img['reward'], data_img['reward'], 0.1)
     metrics.update({f'openl_reward_{k}': v for k, v in stats.items()})
     stats = jaxutils.balance_stats(img['cont'], data_img['cont'], 0.5)
@@ -359,6 +369,86 @@ class Agent(nj.Module):
           print(f'Skipping gradnorm summary for missing loss: {key}')
 
     return metrics, carry_out
+
+  def visualize(self, data, carry):
+    """Per-step world-model predictions for interactive visualization."""
+    data = self.preprocess(data)
+    prevlat, prevact = carry
+    B, T = data['is_first'].shape
+
+    prevacts = {
+        k: jnp.concatenate([prevact[k][:, None], data[k][:, :-1]], 1)
+        for k in self.act_space}
+    prevacts = jaxutils.onehot_dict(prevacts, self.act_space)
+    embed = self.enc(data)
+    newlat, outs = self.dyn.observe(prevlat, prevacts, embed, data['is_first'])
+    recon_dec = self.dec(outs)
+    rew_dist = self.rew(outs)
+    con_dist = self.con(outs)
+
+    recon_forces = recon_dec['forces_local'].mode()
+    recon_positions = recon_dec['positions'].mode()
+    reward_recon = rew_dist.mode()
+    cont_recon = con_dist.mean()
+
+    num_obs = min(self.config.report_openl_context, T // 2)
+    img_start, _ = self.dyn.observe(
+        prevlat,
+        {k: v[:, :num_obs] for k, v in prevacts.items()},
+        embed[:, :num_obs],
+        data['is_first'][:, :num_obs])
+    img_acts = {k: v[:, num_obs:] for k, v in prevacts.items()}
+    _, img_outs = self.dyn.imagine(img_start, img_acts)
+    openl_dec = self.dec(img_outs)
+    openl_rew = self.rew(img_outs)
+    openl_con = self.con(img_outs)
+
+    openl_forces = openl_dec['forces_local'].mode()
+    openl_positions = openl_dec['positions'].mode()
+
+    def pad_time(x):
+      pad_shape = (x.shape[0], num_obs, *x.shape[2:])
+      padding = jnp.full(pad_shape, jnp.nan, x.dtype)
+      return jnp.concatenate([padding, x], axis=1)
+
+    openl_forces_full = pad_time(openl_forces)
+    openl_positions_full = pad_time(openl_positions)
+    reward_openl = pad_time(openl_rew.mode())
+    cont_openl = pad_time(openl_con.mean())
+
+    gt_forces = f32(data['forces_local'])
+    gt_positions = f32(data['positions'])
+    forces_mse_recon = jnp.square(recon_forces - gt_forces).mean(axis=(-2, -1))
+    positions_mse_recon = jnp.square(
+        recon_positions - gt_positions).mean(axis=(-2, -1))
+    forces_mse_openl = jnp.square(
+        openl_forces_full - gt_forces).mean(axis=(-2, -1))
+    positions_mse_openl = jnp.square(
+        openl_positions_full - gt_positions).mean(axis=(-2, -1))
+    t_idx = jnp.arange(T)[None, :]
+    openl_mask = t_idx >= num_obs
+    forces_mse_openl = jnp.where(openl_mask, forces_mse_openl, jnp.nan)
+    positions_mse_openl = jnp.where(openl_mask, positions_mse_openl, jnp.nan)
+
+    newact = {k: data[k][:, -1] for k in self.act_space}
+    return {
+        'forces_local_gt': gt_forces,
+        'positions_gt': gt_positions,
+        'forces_local_recon': recon_forces,
+        'positions_recon': recon_positions,
+        'forces_local_openl': openl_forces_full,
+        'positions_openl': openl_positions_full,
+        'reward_gt': f32(data['reward']),
+        'reward_recon': reward_recon,
+        'reward_openl': reward_openl,
+        'cont_gt': f32(data['cont']),
+        'cont_recon': cont_recon,
+        'cont_openl': cont_openl,
+        'forces_mse_recon': forces_mse_recon,
+        'positions_mse_recon': positions_mse_recon,
+        'forces_mse_openl': forces_mse_openl,
+        'positions_mse_openl': positions_mse_openl,
+    }, (newlat, newact)
 
   def preprocess(self, obs):
     spaces = {**self.obs_space, **self.act_space, **self.aux_spaces}

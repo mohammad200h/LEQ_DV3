@@ -97,6 +97,7 @@ defaults:
     dmc: {size: [64, 64], repeat: 2, image: True, camera: -1}
     procgen: {size: [64, 64]}
     loconav: {size: [64, 64], repeat: 2, camera: -1}
+    leap: {length: 64}
 
   # Agent
   report: True
@@ -297,6 +298,29 @@ crafter:
     steps: 1.1e6
   enc.spaces: 'image'
   dec.spaces: 'image'
+
+leap:
+  <<: *size12m
+  task: leap_finger_close
+  opt.lr: 1e-4
+  opt.schedule: cosine
+  opt.anneal: 5e4
+  run.steps: 5e4
+  run.script: train_eval
+  run.num_envs: 1
+  run.num_envs_eval: 1
+  run.eval_eps: 1
+  run.eval_every: 500
+  run.log_every: 60
+  run.save_every: 300
+  run.driver_parallel: False
+  enc.spaces: 'forces_local|positions'
+  dec.spaces: 'forces_local|positions'
+  # Reward is always 0 in LeapFlexEnv; reconstruction + RSSM are the signal.
+  loss_scales.reward: 1.0
+  loss_scales.actor: 0.0
+  loss_scales.critic: 0.0
+  loss_scales.value: 0.0
 
 d4rl_proprio:
   <<: *size12m

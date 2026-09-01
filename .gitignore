@@ -12,5 +12,6 @@ MUJOCO_LOG.TXT
 data/v-d4rl/_hf_cache
 data/v-d4rl/cheetah_run
 data/v-d4rl/walker_walk
+data/leap/**/*.npz
 logdir
 wandb

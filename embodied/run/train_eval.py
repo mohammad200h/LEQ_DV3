@@ -164,42 +164,49 @@ def train_eval(
       cnts = [0]
       eval_driver.reset(agent.init_policy)
       eval_driver(eval_policy, episodes=args.eval_eps)
-      idx = np.argmax([0 if videos[i] is None else videos[i].shape[0] for i in range(args.num_envs_eval)])
-      for i in range(args.num_envs_eval):
-          print(i, scores[i], np.sum(rewards[i]))
-          if videos[i] is None:
-              videos[i] = np.zeros((0, *videos[idx].shape[1:]), dtype=np.uint8)
+      has_video = any(v is not None for v in videos)
+      if has_video:
+        idx = np.argmax([
+            0 if videos[i] is None else videos[i].shape[0]
+            for i in range(args.num_envs_eval)])
+        for i in range(args.num_envs_eval):
+            print(i, scores[i] if i < len(scores) else None, np.sum(rewards[i]))
+            if videos[i] is None:
+                videos[i] = np.zeros((0, *videos[idx].shape[1:]), dtype=np.uint8)
+            print(videos[i].shape)
 
-          print(videos[i].shape)
+        D = max([videos[i].shape[0] for i in range(args.num_envs_eval)])
+        agg_video = []
+        for i in range(args.num_envs_eval):
+            print(i, videos[i].shape)
+            video = np.concatenate([
+                videos[i],
+                np.zeros((D-videos[i].shape[0], *videos[i].shape[1:]), dtype=videos[i].dtype)
+            ], axis=0)
+            agg_video.append(video)
 
-      D = max([videos[i].shape[0] for i in range(args.num_envs_eval)])
-      agg_video = []
-      for i in range(args.num_envs_eval):
-          print(i, videos[i].shape)
-          video = np.concatenate([
-              videos[i], 
-              np.zeros((D-videos[i].shape[0], *videos[i].shape[1:]), dtype=videos[i].dtype)
-          ], axis=0)
-          agg_video.append(video)
-      
-      if args.num_envs_eval == 10:
-          agg_video = np.stack(agg_video, axis=0)
-          agg_video = agg_video.reshape((2, 5, *agg_video.shape[1:]))
-          agg_video = np.concatenate(agg_video, axis=2)
-          agg_video = np.concatenate(agg_video, axis=2)
+        if args.num_envs_eval == 10:
+            agg_video = np.stack(agg_video, axis=0)
+            agg_video = agg_video.reshape((2, 5, *agg_video.shape[1:]))
+            agg_video = np.concatenate(agg_video, axis=2)
+            agg_video = np.concatenate(agg_video, axis=2)
+        else:
+            agg_video = agg_video[0]
+        agg_video = agg_video[:5000] # Maximum 5000 frames
+        agg_video = agg_video[::4]  # 4x
       else:
-          agg_video = agg_video[0]
-      agg_video = agg_video[:5000] # Maximum 5000 frames
-      agg_video = agg_video[::4]  # 4x
-      rewards = np.concatenate(rewards, axis=0)
-      logger.add({
-          'scores_min': np.min(scores),
-          'scores_max': np.max(scores),
-          'scores': np.mean(scores),
-          'scores_std': np.std(scores),
-          'rewards': np.mean(rewards),
-          'videos': agg_video,
-      }, prefix='epstats')
+        agg_video = None
+      rewards_cat = np.concatenate(rewards, axis=0) if any(len(r) for r in rewards) else np.zeros(1)
+      epstats = {
+          'scores_min': np.min(scores) if scores else 0.0,
+          'scores_max': np.max(scores) if scores else 0.0,
+          'scores': np.mean(scores) if scores else 0.0,
+          'scores_std': np.std(scores) if scores else 0.0,
+          'rewards': np.mean(rewards_cat),
+      }
+      if agg_video is not None:
+        epstats['videos'] = agg_video
+      logger.add(epstats, prefix='epstats')
       #logger.add(eval_epstats.result(), prefix='epstats')
       if len(train_replay):
         mets, _ = agent.report(next(dataset_report), carry_report)
