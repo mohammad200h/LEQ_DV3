@@ -4,6 +4,7 @@ Two-stage LEQ pipeline on Leap+XELA tactile data (same idea as V-D4RL):
 
 1. **World model** (`--algo model`) — RSSM + encoder/decoder on `forces_local` and `positions`.
 2. **LEQ** (`--algo leq`) — freeze the world model, train actor / critic / value with imagined rollouts.
+   Optionally `--algo leq_bc` to add behavioural cloning to the actor (see §5).
 
 Repos:
 
@@ -187,6 +188,92 @@ Do not pass `--algo model` here. Do not start LEQ until:
 - Replay chunks contain a non-zero reward
 - The WM was trained with `--loss_scales.reward 1.0`
 
+### Expectile search
+
+`train_leq.sh` trains **one** expectile. To sweep several, use the search runner:
+
+```bash
+cd /workspace/LEQ_DV3
+./eval/leap/run_search.sh [CONFIG]
+# default: CONFIG=eval/leap/search.yaml
+```
+
+`eval/leap/search.yaml` holds `tasks` and `expectiles` lists plus scalar `gpu`
+and `seed`; the sweep is their cross product, run sequentially:
+
+```yaml
+expectiles: [0.1, 0.2, 0.5, 0.8, 1.0]
+tasks: [leap_cyringe]
+gpu: 0
+seed: 0
+```
+
+Each point calls `train_leq.sh`, so it writes its own
+`logdir/leq/<TASK>/<EXPECTILE>/<SEED>/` and its own W&B run named
+`leq_<TASK>_<EXPECTILE>_<SEED>` in `WANDB_PROJECT`. Every task in the grid needs
+its world-model checkpoint first — the runner checks all of them before starting.
+
+- `DRY_RUN=True ./eval/leap/run_search.sh` — print the planned commands only
+- A failing point is reported and skipped; the remaining points still run
+- Do not export `WANDB_NAME` for a sweep, or the runs collide (the runner unsets it)
+
+### LEQ + behavioural cloning
+
+Plain `--algo leq` computes a `bc_loss` metric but never trains on it. To add
+behavioural cloning to the actor, use `--algo leq_bc`:
+
+```bash
+cd /workspace/LEQ_DV3
+./eval/leap/train_leq_bc.sh [GPU] [SEED] [TASK] [EXPECTILE] [BC_SCALE]
+# defaults: GPU=0  SEED=0  TASK=leap_squeeze  EXPECTILE=0.1  BC_SCALE=1.0
+```
+
+Examples:
+
+```bash
+./eval/leap/train_leq_bc.sh 0 0 leap_squeeze
+./eval/leap/train_leq_bc.sh 0 0 leap_squeeze 0.1 0.1   # weaker BC
+./eval/leap/train_leq_bc.sh 0 0 leap_squeeze 0.1 0.0   # plain LEQ, for A/B
+```
+
+What this does, on top of stage 5:
+
+- Loads `--algo leq_bc` (`dreamerv3/agent_leq_bc.py`)
+- Same frozen-WM path — restores `--run.model_checkpoint`, optimizes only `ac_modules`
+- Adds `losses['actor_bc'] = clip(adv, 0, 100) * -log π(a_data | z)` on the replay
+  (dataset) actions, where `adv = critic - value` on the posterior latents
+- BC strength is `--loss_scales.actor_bc` (the `BC_SCALE` argument)
+
+BC runs **in latent space**: the actor is an MLP over `[deter, stoch]`
+(`configs.yaml` → `actor.inputs`), so it never sees `forces_local` / `positions`
+directly. Targets are the raw `(16,)` joint actions from the dataset.
+
+Checkpoint:
+
+```
+logdir/leq_bc/<TASK>/<EXPECTILE>/<BC_SCALE>/<SEED>/checkpoint.ckpt
+```
+
+Caveats:
+
+- The weight is **clipped positive advantage**, so BC only clones actions the
+  critic rates above the value baseline. With all-zero rewards the advantages
+  collapse to ~0 and this degenerates to plain LEQ — same reward prerequisites
+  as stage 5 apply.
+- Sanity-check `replay_adv` and `bc_loss` on W&B. Flat `replay_adv` means the
+  dataset / reward head is the problem, not `BC_SCALE`.
+- For unweighted BC on its own (no LEQ, world model trained jointly), use
+  `--algo bc` (`dreamerv3/bc_agent.py`).
+- `agent_leq_bc.py` is an older fork of `agent.py` and lacks its later additions
+  (e.g. the planning branch in `policy`). Do not expect it to track `--algo leq`.
+- `run_search.sh` calls `train_leq.sh`, so sweeps do **not** cover `leq_bc`.
+
+Rollout works unchanged — point `run_rollout.sh` at the `leq_bc` logdir:
+
+```bash
+./eval/leap/run_rollout.sh 0 logdir/leq_bc/leap_squeeze/0.1/1.0/0
+```
+
 ---
 
 ## 6. Roll out the trained LEQ policy in LeapFlexEnv
@@ -268,12 +355,16 @@ LEQ_DV3/data/leap/convert_episodes.py
 LEQ_DV3/data/leap/squeeze/*.npz                        # DreamerV3 chunks
 LEQ_DV3/eval/leap/train_model.sh
 LEQ_DV3/eval/leap/train_leq.sh
+LEQ_DV3/eval/leap/train_leq_bc.sh                      # stage 2 + BC
+LEQ_DV3/eval/leap/search.yaml                          # expectile search grid
+LEQ_DV3/eval/leap/run_search.sh
 LEQ_DV3/eval/leap/run_visualizer.sh
 LEQ_DV3/eval/leap/run_rollout.sh
 LEQ_DV3/eval/leap/rollout_leq.py
 LEQ_DV3/dreamerv3/configs.yaml                         # leap: block
 LEQ_DV3/logdir/model/leap_squeeze/0/0/checkpoint.ckpt  # stage 1
 LEQ_DV3/logdir/leq/leap_squeeze/0.1/0/checkpoint.ckpt  # stage 2
+LEQ_DV3/logdir/leq_bc/leap_squeeze/0.1/1.0/0/checkpoint.ckpt
 ```
 
 V-D4RL reference (same two-stage idea, different data):

@@ -451,13 +451,13 @@ class Agent(nj.Module):
       metrics.update(jaxutils.tensorstats(replay_critic.mean(), 'replay_val'))
 
       replay_adv = (replay_critic.mode().mean(axis=-1) - replay_value.mode()) / rscale
-      exp_adv = jnp.clip(repaly_adv, 0., 100.)
+      exp_adv = jnp.clip(replay_adv, 0., 100.)
       #exp_adv = jnp.clip(jnp.exp(jnp.clip(replay_adv, -20., 5.)) - 1., 0., 100.)
       bc_loss = -sum(actor_log_prob(replay_actor, self.actor_dists, replay_acts).values())
 
       metrics.update(jaxutils.tensorstats(bc_loss, 'bc_loss'))
-      awr_loss = sg(exp_adv) * bc_loss
-      losses['actor'] = actor_loss.mean() + awr_loss.mean()
+      # Scaled by loss_scales.actor_bc so BC strength is tunable from the CLI.
+      losses['actor_bc'] = sg(exp_adv) * bc_loss
       metrics.update(jaxutils.tensorstats(replay_adv, 'replay_adv'))
 
     ret = ret[:, :-1]

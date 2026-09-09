@@ -1,0 +1,14 @@
+# Grid for ./eval/leap/run_search.sh: every task x every expectile, run in sequence.
+expectiles:
+  - 0.01
+  - 0.05
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.4
+  - 0.5
+
+tasks:
+  - leap_cyringe
+gpu: 0
+seed: 0

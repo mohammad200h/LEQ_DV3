@@ -86,14 +86,17 @@ def _load_env_config(env_config: Path) -> dict:
     max_timestep = env_cfg.get('max_timestep')
     if max_timestep is not None:
       max_timestep = int(max_timestep)
+    policy_type = str(policy_cfg.get('type') or 'cyringe').strip().lower()
     n_traj_waypoints = None
-    if bool(policy_cfg.get('use_trajectory', False)):
+    ik_helpers = policy_type != 'random'
+    if ik_helpers and bool(policy_cfg.get('use_trajectory', False)):
       n_traj_waypoints = int(policy_cfg.get('traj_waypoints') or DEFAULT_TRAJ_WAYPOINTS)
     env_spec = {
         'n_substeps': n_substeps,
         'max_timestep': max_timestep,
         'cyringe': dict(env_cfg.get('cyringe') or {}) or None,
-        'ik_helpers': True,
+        'domain_randomization': env_cfg.get('domain_randomization'),
+        'ik_helpers': ik_helpers,
         'n_traj_waypoints': n_traj_waypoints,
     }
     return {
@@ -278,6 +281,7 @@ def main():
   print(f'Logdir:     {args.logdir.resolve()}')
   print(f'Env config: {args.env_config.resolve()}')
   print(f'Env kind:   {env_cfg["kind"]}')
+  print(f'Domain rnd: {env._domain_randomization}')
   print(f'Task:       {config.task}')
   print(f'Algo:       {config.algo}')
   print(f'Max steps:  {max_steps}')
