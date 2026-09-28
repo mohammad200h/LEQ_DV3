@@ -187,6 +187,12 @@ Do not pass `--algo model` here. Do not start LEQ until:
 - Replay chunks contain a non-zero reward
 - The WM was trained with `--loss_scales.reward 1.0`
 
+DITTO is a separate stage-2 agent on the same frozen world model. It does not use the reward head. See `Ditto_DV3_Implementation.md` and:
+
+```bash
+./eval/leap/train_ditto.sh 0 0 leap_squeeze
+```
+
 ---
 
 ## 6. Roll out the trained LEQ policy in LeapFlexEnv

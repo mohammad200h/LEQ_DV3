@@ -163,6 +163,8 @@ def make_agent(config):
     from . import agent_leq_bc as agt
   if config.algo == 'leq':
     from . import agent as agt
+  if config.algo == 'ditto':
+    from . import ditto_agent as agt
   if config.algo == 'leq_v':
     from . import agent_v as agt
   if config.algo == 'model':
