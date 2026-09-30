@@ -34,6 +34,21 @@ def latent_vec(outs):
   return f32(outs['deter'])
 
 
+def _lambda_return(reward, value, gamma, lam):
+  """DreamerV2 λ-return. The last step bootstraps from the value."""
+  last = value[:, -1]
+  returns = []
+  g = last
+  for t in reversed(range(reward.shape[1])):
+    if t == reward.shape[1] - 1:
+      g = value[:, t]
+    else:
+      g = reward[:, t] + gamma * (
+          (1.0 - lam) * value[:, t + 1] + lam * g)
+    returns.append(g)
+  return jnp.stack(list(reversed(returns)), axis=1)
+
+
 def ditto_latent_reward(learner, expert):
   """Paper eq. 8 on deter: h^E · h^π / max(||h^E||, ||h^π||)^2. Both sides are sg'd."""
   z_pi = sg(latent_vec(learner))
@@ -144,10 +159,11 @@ class Agent(nj.Module):
     self.opt = jaxutils.Optimizer(lr, **kw, name='opt')
     self.modules = [
         self.enc, self.dyn, self.dec, self.rew, self.con,
-        self.actor, self.critic, self.value
+        self.actor, self.value
     ]
+    # The action-conditioned critic is unused. The value head is the critic.
     self.ac_modules = [
-        self.actor, self.critic, self.value
+        self.actor, self.value
     ]
     scales = self.config.loss_scales.copy()
     cnn = scales.pop('dec_cnn')
@@ -164,12 +180,41 @@ class Agent(nj.Module):
   def aux_spaces(self):
     spaces = {}
     spaces['stepid'] = embodied.Space(np.uint8, 20)
+    if self.config.algo == 'ditto':
+      # Posterior at each frame after the world model has watched the episode
+      # from its real start. Filled once before training.
+      spaces['expert_deter'] = embodied.Space(
+          np.float32, self.config.dyn.rssm.deter)
+      spaces['expert_stoch'] = embodied.Space(
+          np.int32, self.config.dyn.rssm.stoch)
     if self.config.replay_context:
       latdtype = jaxutils.COMPUTE_DTYPE
       latdtype = np.float32 if latdtype == jnp.bfloat16 else latdtype
       spaces['deter'] = embodied.Space(latdtype, self.config.dyn.rssm.deter)
       spaces['stoch'] = embodied.Space(np.int32, self.config.dyn.rssm.stoch)
     return spaces
+
+  def encode_segment(self, carry, prevact, data):
+    """Run the frozen world model over one episode slice.
+
+    `carry` is the posterior from the previous slice of the same episode.
+    The first slice of an episode passes is_first on its first frame, which
+    resets that carry.
+    """
+    data = self.preprocess(data)
+    # Replay batches omit reset, so the frozen world model never saw it.
+    act_keys = [k for k in self.act_space if k != 'reset']
+    prevacts = {
+        k: jnp.concatenate([prevact[k][:, None], data[k][:, :-1]], 1)
+        for k in act_keys}
+    prevacts = jaxutils.onehot_dict(prevacts, self.act_space)
+    embed = self.enc(data)
+    carry, outs = self.dyn.observe(
+        carry, prevacts, embed, data['is_first'])
+    lastact = {k: data[k][:, -1] for k in act_keys}
+    deter = f32(outs['deter'])
+    stoch = jnp.argmax(outs['stoch'], axis=-1).astype(jnp.int32)
+    return carry, lastact, deter, stoch
 
   def init_policy(self, batch_size):
     prevact = {
@@ -304,9 +349,12 @@ class Agent(nj.Module):
             embed=embed, act=act, out=out, lat=lat,
         ))[0]}
 
+    # expert_deter and expert_stoch are written into the replay before
+    # training. The live policy does not produce them.
     assert all(
         k in outs for k in self.aux_spaces
-        if k not in ('stepid', 'finite', 'is_online')), (
+        if k not in (
+            'stepid', 'finite', 'is_online', 'expert_deter', 'expert_stoch')), (
               list(outs.keys()), self.aux_spaces)
 
     act = {
@@ -354,7 +402,8 @@ class Agent(nj.Module):
     out, carry, metrics = outs['outs'], outs['carry'], outs['metrics']
     #jax.debug.print("METS {x}", x=jax.tree_util.tree_map(jnp.mean, mets))
     metrics.update(mets)
-    self.updaterQ()
+    # updaterQ copies the unused action-conditioned critic. That network is
+    # never built, so the copy has nothing to read.
     #self.updaterV()
     #self.updaterP()
     outs = {}
@@ -427,141 +476,92 @@ class Agent(nj.Module):
       act, logpi, logpi_sg = actor_sample(dist, self.actor_dists)
       return (lat, act), (sg(out), sg(act), logpi, logpi_sg)
 
-    if self.config.imag_start != 'all':
-      raise NotImplementedError(
-          'DITTO needs imag_start=all so each rollout stays time-aligned '
-          'with the expert posterior.')
     B, T = data['is_first'].shape
     H = int(self.config.imag_length)
-    # Window is the start posterior plus H future expert posteriors.
-    if T <= H:
+    # One expert window is H frames. The original trainer unrolls H steps and
+    # scores the first H-1 against the next expert latent. The last reward is 0.
+    if T < H:
       raise ValueError(
-          f'DITTO imag_length={H} requires batch_length > imag_length, got {T}.')
-    n_starts = T - H
-    future_idx = jnp.arange(n_starts)[:, None] + jnp.arange(H + 1)[None, :]
+          f'DITTO imag_length={H} requires batch_length >= imag_length, got {T}.')
+    n_starts = T - H + 1
+    future_idx = jnp.arange(n_starts)[:, None] + jnp.arange(H)[None, :]
+    classes = int(self.config.dyn.rssm.classes)
 
-    def _starts(x):
-      return x[:, :n_starts]
-
-    def _expert_window(x):
+    def _window(x):
       window = jnp.take(x, future_idx, axis=1)
-      return window.reshape((B * n_starts, H + 1, *x.shape[2:]))
+      return window.reshape((B * n_starts, H, *x.shape[2:]))
 
-    start_outs = treemap(_starts, replay_outs)
-    expert_outs = treemap(_expert_window, replay_outs)
-    startlat = self.dyn.outs_to_carry(treemap(
-        lambda x: x.reshape((B * n_starts, 1, *x.shape[2:])), start_outs))
-    startout = treemap(
-        lambda x: x.reshape((B * n_starts, *x.shape[2:])),
-        start_outs)
+    # Cached posteriors were encoded from each episode's real first frame,
+    # so a window that begins mid-episode still has that history behind it.
+    expert_deter = _window(f32(data['expert_deter']))
+    expert_stoch = _window(jax.nn.one_hot(
+        data['expert_stoch'], classes).astype(f32))
+    # imagine() returns the compute dtype (bfloat16). The scan carry must match.
+    startlat = cast({'deter': expert_deter[:, 0], 'stoch': expert_stoch[:, 0]})
+    startout = cast({'deter': expert_deter[:, 0], 'stoch': expert_stoch[:, 0]})
 
     if self.config.imag_repeat > 1:
       N = self.config.imag_repeat
-      startlat, startout, expert_outs = treemap(
-          lambda x: x.repeat(N, 0), (startlat, startout, expert_outs))
-    startact, startlogpi, startlogpi_sg = actor_sample(self.actor(startout, bdims=1), self.actor_dists)
-    _, (outs, acts, logpis, logpis_sg) = jaxutils.scan(
+      startlat, startout, expert_deter, expert_stoch = treemap(
+          lambda x: x.repeat(N, 0),
+          (startlat, startout, expert_deter, expert_stoch))
+    startact, startlogpi, startlogpi_sg = actor_sample(
+        self.actor(startout, bdims=1), self.actor_dists)
+    _, (imag_outs, acts, logpis, logpis_sg) = jaxutils.scan(
         imgstep, (startlat, startact),
-        jnp.arange(self.config.imag_length), self.config.imag_unroll)
-    outs, acts, logpis, logpis_sg = treemap(lambda x: x.swapaxes(0, 1), (outs, acts, logpis, logpis_sg))
-    outs, acts, logpis, logpis_sg = treemap(
-        lambda first, seq: jnp.concatenate([first, seq], 1),
-        treemap(lambda x: x[:, None], (startout, startact, startlogpi, startlogpi_sg)), (outs, acts, logpis, logpis_sg)
-    )
+        jnp.arange(H), self.config.imag_unroll)
+    imag_outs, acts, logpis, logpis_sg = treemap(
+        lambda x: x.swapaxes(0, 1), (imag_outs, acts, logpis, logpis_sg))
+    # Index 0 is the expert start. Index k+1 is the state after learner action k.
+    # The scan also emits a logit the cached start does not have, so only the
+    # actor inputs and the sampled actions are concatenated.
+    imag_deter = jnp.concatenate(
+        [cast(expert_deter[:, :1]), imag_outs['deter']], axis=1)
+    imag_stoch = jnp.concatenate(
+        [cast(expert_stoch[:, :1]), imag_outs['stoch']], axis=1)
+    acts = {
+        k: jnp.concatenate([startact[k][:, None], acts[k]], 1) for k in acts}
+    logpis_sg = {
+        k: jnp.concatenate([startlogpi_sg[k][:, None], logpis_sg[k]], 1)
+        for k in logpis_sg}
 
-    # Annotate. Reward is latent agreement with the expert, not self.rew.
-    # Index 0 is the shared start state; the return uses steps 1..H.
-    rew = ditto_latent_reward(outs, expert_outs)[:, 1:]
-    con = self.con(outs).mean()[:, 1:]
-    con_padded = jnp.concatenate([jnp.ones_like(con[:, -1:]), con], 1)
-    
-    # Return. ditto_gamma is the paper discount. Predicted continue still
-    # masks terminals inside the chunk.
-    critic = self.critic({**outs, **sg(acts)})
-    slowcritic = self.slowcritic({**outs, **sg(acts)})
-    value = self.value({**outs})
-    voffset, vscale = self.valnorm.stats()
-    val = critic.mean() * vscale + voffset
-    slowval = slowcritic.mean() * vscale + voffset
-    tarval = slowval if self.config.slowtar else val
-    discount = f32(self.config.ditto_gamma)
-    weight = jnp.cumprod(discount * con_padded, 1) / discount
-    
+    # Compare the state after action k with expert frame k+1, for k = 0 .. H-2.
+    scored = ditto_latent_reward(
+        {'deter': f32(imag_deter[:, 1:H])},
+        {'deter': expert_deter[:, 1:]})
+    rew = jnp.concatenate([scored, jnp.zeros_like(scored[:, :1])], axis=1)
 
-    masks = [jnp.ones_like(con[:, -1])]
-    for t in range(self.config.imag_length):
-      masks.append(masks[t] * con[:, t])
-    mask = jnp.stack(masks, axis=1)
-    rets = [tarval[:, -1]];
-    lamb = self.config.return_lambda; lamb_weight = 1.0
-    for t in reversed(range(self.config.imag_length)):
-      q_cur = tarval[:, t]
-      q_next = (mask[:, t, None] * rew[:, t, None] + mask[:, t+1, None] * discount * rets[-1])
-      next_value = (q_cur + lamb * lamb_weight * q_next) / (1 + lamb * lamb_weight)
-      rets.append(next_value)
-      lamb_weight = 1.0 + lamb * lamb_weight
-    ret = jnp.stack(list(reversed(rets)), 1)
+    # States the H actions were taken from. Stop-grad so the value loss does
+    # not flow back through the world model into the actor.
+    states = sg({'deter': imag_deter[:, :H], 'stoch': imag_stoch[:, :H]})
+    v = self.value(states).mean()
+    while v.ndim > 2:
+      v = jnp.squeeze(v, axis=-1)
+    gamma = f32(self.config.ditto_gamma)
+    lam = f32(self.config.return_lambda)
+    ret = _lambda_return(rew, sg(v), gamma, lam)
+    adv = ret - sg(v)
+    adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
-   
-    '''
-    rets = [tarval[:, -1]]
-    disc = con * discount
-    lam = self.config.return_lambda
-    interm = rew[:, :, None] + (1 - lam) * disc[:, :, None] * tarval[:, 1:]
-    for t in reversed(range(disc.shape[1])):
-      rets.append(interm[:, t] + disc[:, t, None] * lam * rets[-1])
-    ret = jnp.stack(list(reversed(rets)), 1)
-    '''
+    logpi = sum(logpis_sg.values())[:, :H]
+    policy_loss = (-logpi[:, :-1] * sg(adv[:, :-1])).mean()
+    actor_dist = self.actor(states)
+    entropy = sum(dist.entropy() for dist in actor_dist.values()).mean()
+    # 0.05 is the coefficient hardcoded in the released trainer's train().
+    losses['actor'] = policy_loss - f32(0.05) * entropy
 
-    expectile = self.config.expectile
-    actor = self.actor(outs)
-    #baseline = self.critic({**outs, **sg(actor.mode())}).mean() * vscale + voffset
-    baseline = value.mean() * vscale + voffset
-    roffset, rscale = self.retnorm(ret, update) 
-    if ret.shape[-1] == 1:
-        Aret = ret.mean(axis=-1)
-        Atarval = tarval.mean(axis=-1)
-    else:
-        beta = 4.0
-        Aret = ret.mean(axis=-1) - beta * ret.std(axis=-1)
-        Atarval = tarval.mean(axis=-1) - beta * tarval.std(axis=-1)
-    adv = (Aret - baseline) / rscale
-
-    #### LEQ ####
-    adv_weight = jnp.where(Aret > Atarval, expectile, 1 - expectile)
-    adv = adv_weight * adv
-    #############
-    logpi = sum(logpis_sg.values())
-    ents = {k: -logpis[k] if self.actor_dists[k] == 'tanh_normal' else v.entropy() for k, v in actor.items()}
-    actor_loss = sg(weight) * -(
-        logpi * sg(adv)
-        #+ 0.2 * sum(ents.values())
-        + self.config.actent * sum(ents.values())
-    )
-    #jax.debug.print('logpi {x} {y}', x=logpi.min(), y=logpi.max())
-    #jax.debug.print('entropy {x} {y}', x=logpi.min(), y=logpi.max())
-    #jax.debug.print('adv {x} {y}', x=adv.min(), y=adv.max())
-
-    losses['actor'] = actor_loss
-
-    # Critic
-    voffset, vscale = self.valnorm(ret, update)
-    ret_normed = (ret - voffset) / vscale
-    adv_weight = jnp.where(tarval < ret, expectile, 1-expectile)
-    losses['critic'] = sg(weight)[:, :-1, None] * -(
-        adv_weight * critic.log_prob(sg(ret_normed)) +
-        self.config.slowreg * critic.log_prob(sg(slowcritic.mean()))
-    )[:, :-1]
-
-    #jax.debug.print('critic {x} {y}', x=losses['critic'].min(), y=losses['critic'].max())
-    # Value
-    losses['value'] = sg(weight) * -(
-        value.log_prob(sg(Atarval))
-    )
-
-    # No replay critic. It regresses data['reward'] and would pull the value
-    # normalizer toward the environment reward. DITTO's only reward is rew above.
+    value_loss = 0.5 * jnp.square(v[:, :-1] - sg(ret[:, :-1])).mean()
+    losses['value'] = f32(0.01) * value_loss
+    losses['critic'] = jnp.zeros((), f32)
     losses['replay_critic'] = jnp.zeros((), f32)
+
+    val = v
+    weight = jnp.ones_like(rew)
+    adv_weight = jnp.ones_like(adv)
+    roffset = jnp.zeros((), f32)
+    rscale = jnp.ones((), f32)
+    ents = {k: dist.entropy() for k, dist in actor_dist.items()}
+    actor = actor_dist
 
     ret = ret[:, :-1]
     # Metrics
@@ -570,8 +570,8 @@ class Agent(nj.Module):
     metrics.update(jaxutils.tensorstats(adv_weight, 'adv_weight'))
     metrics.update(jaxutils.tensorstats(adv, 'adv'))
     metrics.update(jaxutils.tensorstats(rew, 'rew'))
-    metrics['ditto/reward'] = rew.mean()
-    metrics['ditto/latent_distance'] = (1 - rew).mean()
+    metrics['ditto/reward'] = scored.mean()
+    metrics['ditto/latent_distance'] = (1.0 - scored).mean()
     metrics.update(jaxutils.tensorstats(weight, 'weight'))
     metrics.update(jaxutils.tensorstats(val, 'val'))
     metrics.update(jaxutils.tensorstats(ret, 'ret'))

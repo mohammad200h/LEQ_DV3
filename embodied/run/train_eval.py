@@ -87,10 +87,6 @@ def train_eval(
               videos[worker] = result[f'policy_{key}']
           #epstats.add(result)
 
-  dataset_train = agent.dataset(
-      bind(train_replay.dataset, args.batch_size, args.batch_length))
-  dataset_report = agent.dataset(
-      bind(train_replay.dataset, args.batch_size, args.batch_length_eval))
   fns = [bind(make_eval_env, i) for i in range(args.num_envs_eval)]
   carry = [agent.init_train(args.batch_size)]
   carry_report = agent.init_report(args.batch_size)
@@ -116,6 +112,13 @@ def train_eval(
     checkpoint.load_model(args.model_checkpoint)
   checkpoint.load_or_save()
   should_save(step)  # Register that we just saved.
+  # DITTO encodes each episode from its real start before any batch is sampled.
+  if hasattr(agent, 'cache_expert_states'):
+    agent.cache_expert_states(train_replay)
+  dataset_train = agent.dataset(
+      bind(train_replay.dataset, args.batch_size, args.batch_length))
+  dataset_report = agent.dataset(
+      bind(train_replay.dataset, args.batch_size, args.batch_length_eval))
 
   print('Start training loop')
   train_policy = lambda *args: agent.policy(*args, mode='train')

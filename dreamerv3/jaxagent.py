@@ -218,6 +218,7 @@ class JAXAgent(embodied.Agent):
   @embodied.timer.section('jaxagent_train')
   def train(self, data, carry):
     seed = data['seed']
+    data = self._fill_expert_cache(data)
     data = self._filter_data(data)
     allo = {k: v for k, v in self.params.items() if k in self.policy_keys}
     dona = {k: v for k, v in self.params.items() if k not in self.policy_keys}
@@ -265,6 +266,7 @@ class JAXAgent(embodied.Agent):
   @embodied.timer.section('jaxagent_report')
   def report(self, data, carry):
     seed = data['seed']
+    data = self._fill_expert_cache(data)
     data = self._filter_data(data)
     with embodied.timer.section('jit_report'):
       with self.train_lock:
@@ -454,6 +456,90 @@ class JAXAgent(embodied.Agent):
   def _filter_data(self, data):
     return {k: v for k, v in data.items() if k in self.keys}
 
+  def _fill_expert_cache(self, data):
+    """Eval batches have no cached expert posterior. Training batches do."""
+    if self.config.algo != 'ditto' or 'is_first' not in data:
+      return data
+    if 'expert_deter' in data and 'expert_stoch' in data:
+      return data
+    data = dict(data)
+    batch, time = data['is_first'].shape[:2]
+    rssm = self.config.dyn.rssm
+    # The batch is already on the GPU. Numpy zeros would be copied later and
+    # this run blocks that copy.
+    data['expert_deter'] = jax.device_put(np.zeros(
+        (batch, time, int(rssm.deter)), np.float32), self.train_sharded)
+    data['expert_stoch'] = jax.device_put(np.zeros(
+        (batch, time, int(rssm.stoch)), np.int32), self.train_sharded)
+    return data
+
+  def cache_expert_states(self, replay):
+    """Encode every episode from its real first frame and store the posterior.
+
+    Matches the original DITTO featurizer: a window that starts at frame 200
+    uses the latent computed after the preceding 200 frames, not a latent
+    recomputed as if that frame were a reset.
+    """
+    if self.config.algo != 'ditto':
+      return
+    window = 64
+    pure = nj.pure(self.agent.encode_segment)
+    # modify=True lets the scan see the frozen weights. The new state is
+    # discarded, so those weights are not updated.
+    encode = jax.jit(lambda params, carry, prevact, data, seed: pure(
+        params, carry, prevact, data,
+        seed=seed, modify=True, create=False)[1])
+
+    rssm = self.config.dyn.rssm
+    chains = _episode_chains(replay)
+    n_steps = 0
+    print(f'Caching DITTO expert states for {len(chains)} episodes')
+    for chain_i, chain in enumerate(chains):
+      # jnp.zeros would copy a host scalar onto the GPU, which this run blocks.
+      carry = jax.device_put({
+          'deter': np.zeros((1, int(rssm.deter)), np.float32),
+          'stoch': np.zeros(
+              (1, int(rssm.stoch), int(rssm.classes)), np.float32),
+      })
+      prevact = {
+          k: jax.device_put(np.zeros((1, *space.shape), space.dtype))
+          for k, space in self.act_space.items() if k != 'reset'}
+      for chunk in chain:
+        length = int(chunk.length)
+        pos = 0
+        deter_parts = []
+        stoch_parts = []
+        while pos < length:
+          take = min(window, length - pos)
+          segment = jax.device_put(_segment_batch(chunk, pos, take, window))
+          seed = jax.device_put(np.array([
+              int(self.rng.integers(0, 2 ** 31)),
+              int(self.rng.integers(0, 2 ** 31)),
+          ], np.uint32))
+          carry, prevact, deter, stoch = encode(
+              self.params, carry, prevact, segment, seed)
+          # Slice on the host. Slicing the device array would copy `take`.
+          deter_host = np.asarray(jax.device_get(deter))
+          stoch_host = np.asarray(jax.device_get(stoch))
+          deter_parts.append(deter_host[0, :take])
+          stoch_parts.append(stoch_host[0, :take])
+          pos += take
+          if take < window:
+            # Padded tail is the end of this slice. Drop the polluted carry
+            # only when the episode ends; a full window keeps the real carry.
+            if chunk is chain[-1]:
+              pass
+            else:
+              raise RuntimeError(
+                  'Episode chunk is not a multiple of the encode window '
+                  f'and is followed by another chunk (length={length}).')
+        chunk.data['expert_deter'] = np.concatenate(deter_parts, axis=0)
+        chunk.data['expert_stoch'] = np.concatenate(stoch_parts, axis=0)
+        n_steps += length
+      if (chain_i + 1) % 10 == 0 or chain_i + 1 == len(chains):
+        print(f'  encoded {chain_i + 1}/{len(chains)} episodes ({n_steps} steps)')
+    print(f'Cached expert states for {n_steps} steps')
+
   def _dummy_batch(self, spaces, batch_dims):
     spaces = [(k, v) for k, v in spaces.items()]
     data = {k: np.zeros(v.shape, v.dtype) for k, v in spaces}
@@ -481,6 +567,38 @@ class JAXAgent(embodied.Agent):
     seed = self._next_seeds(self.train_sharded)
     carry = self.init_report(self.config.batch_size)
     self._report = self._report.lower(self.params, data, carry, seed)
+
+
+def _episode_chains(replay):
+  chunks = replay.chunks
+  pointed = {chunk.succ for chunk in chunks.values()}
+  heads = [chunk for chunk in chunks.values() if chunk.uuid not in pointed]
+  chains = []
+  for head in heads:
+    chain = []
+    seen = set()
+    chunk = head
+    while chunk is not None and chunk.uuid not in seen:
+      seen.add(chunk.uuid)
+      chain.append(chunk)
+      chunk = chunks.get(chunk.succ)
+    chains.append(chain)
+  return chains
+
+
+def _segment_batch(chunk, pos, take, window):
+  keys = (
+      'forces_local', 'positions', 'action', 'reward',
+      'is_first', 'is_last', 'is_terminal')
+  batch = {}
+  for key in keys:
+    value = np.asarray(chunk.data[key][pos: pos + take])
+    if take < window:
+      pad = window - take
+      pad_width = [(0, pad)] + [(0, 0)] * (value.ndim - 1)
+      value = np.pad(value, pad_width)
+    batch[key] = value[None]
+  return batch
 
 
 def fetch_async(value):
