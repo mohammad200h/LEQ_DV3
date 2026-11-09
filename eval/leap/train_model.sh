@@ -6,7 +6,7 @@
 # 2. Convert:  python data/leap/convert_episodes.py --input <collection_dir> --output data/leap/squeeze
 # 3. Train:    ./eval/leap/train_model.sh [GPU] [SEED] [TASK]
 #
-# W&B (on by default): set WANDB_API_KEY in /workspace/LEQ/docker/.env or the
+# W&B (on by default): set WANDB_API_KEY in /workspace/LeapXELA_Hardware_ws/LEQ_DV3/.env or the
 # environment. Override with WANDB_PROJECT / WANDB_NAME, or WANDB_ENABLE=False.
 set -euo pipefail
 
@@ -21,10 +21,10 @@ WANDB_NAME=${WANDB_NAME:-${ALGO}_${TASK}_${SEED}}
 
 cd "$(dirname "$0")/../.."
 
-if [ -f /workspace/LEQ/docker/.env ]; then
+if [ -f /workspace/LeapXELA_Hardware_ws/LEQ_DV3/.env ]; then
   set -a
   # shellcheck disable=SC1091
-  source /workspace/LEQ/docker/.env
+  source /workspace/LeapXELA_Hardware_ws/LEQ_DV3/.env
   set +a
 fi
 

@@ -117,21 +117,22 @@ class RSSM(nj.Module):
     return penalty
 
 
-  def imagine(self, carry, action, bdims=2):
+  def imagine(self, carry, action, bdims=2, head=None):
+    # head: fixed ensemble member to roll out; None samples one per step.
     assert bdims in (1, 2)
     if isinstance(action, dict):
       action = jaxutils.concat_dict(action)
     carry, action = cast((carry, action))
     if bdims == 2:
       return jaxutils.scan(
-          lambda carry, action: self.imagine(carry, action, bdims=1),
+          lambda carry, action: self.imagine(carry, action, bdims=1, head=head),
           cast(carry), cast(action), self.unroll, axis=1)
     if self.markov:
         _stoch = carry['stoch'].reshape((carry['stoch'].shape[0], -1))
         deter = feat = jnp.concatenate([_stoch, action], axis=-1)
     else:
         deter, feat = self._gru(carry['deter'], carry['stoch'], action)
-    logit = self._prior(feat)
+    logit = self._prior(feat, head=head)
     stoch = cast(self._dist(logit).sample(seed=nj.seed()))
     carry = dict(deter=deter, stoch=stoch)
     outs = dict(deter=deter, stoch=stoch, logit=logit)
@@ -155,7 +156,7 @@ class RSSM(nj.Module):
         self._dist(post).entropy(), 'post_ent'))
     return {'dyn': dyn, 'rep': rep}, metrics
 
-  def _prior(self, feat, output_all=False):
+  def _prior(self, feat, output_all=False, head=None):
     kw = dict(**self.kw, norm=self.norm, act=self.act)
     x = feat
     if self.ensemble > 1:
@@ -166,7 +167,9 @@ class RSSM(nj.Module):
         logit = self._logit(f'imglogit_{j}', x)
         logits.append(logit)
       logits = jnp.stack(logits, axis=0)
-      if output_all is False:
+      if output_all is False and head is not None:
+          logit = logits[head]
+      elif output_all is False:
           index = jax.random.choice(nj.seed(), self.ensemble, ())
           logit = logits[index]
           #index = jax.random.choice(nj.seed(), self.ensemble, (1, *logits.shape[1:-1], 1))

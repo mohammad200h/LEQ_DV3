@@ -81,6 +81,20 @@ def symexp(x):
   return jnp.sign(x) * jnp.expm1(jnp.abs(x))
 
 
+def norm_forces(x, cfg):
+  """Per-channel z-score of forces_local with config.forces_norm (as is if not enabled)."""
+  if not cfg.enable:
+    return x
+  return (f32(x) - jnp.asarray(cfg.mean, f32)) / jnp.asarray(cfg.std, f32)
+
+
+def denorm_forces(x, cfg):
+  """Inverse of norm_forces: back to Xela counts."""
+  if not cfg.enable:
+    return x
+  return f32(x) * jnp.asarray(cfg.std, f32) + jnp.asarray(cfg.mean, f32)
+
+
 def switch(pred, lhs, rhs):
   def fn(lhs, rhs):
     assert lhs.shape == rhs.shape, (pred.shape, lhs.shape, rhs.shape)

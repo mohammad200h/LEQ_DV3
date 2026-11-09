@@ -8,10 +8,10 @@ PORT=${3:-7860}
 
 cd "$(dirname "$0")/../.."
 
-if [ -f /workspace/LEQ/docker/.env ]; then
+if [ -f /workspace/LeapXELA_Hardware_ws/LEQ_DV3/.env ]; then
   set -a
   # shellcheck disable=SC1091
-  source /workspace/LEQ/docker/.env
+  source /workspace/LeapXELA_Hardware_ws/LEQ_DV3/.env
   set +a
 fi
 

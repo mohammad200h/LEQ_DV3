@@ -10,10 +10,13 @@ import time
 
 def train_eval(
     make_agent, make_train_replay, make_eval_replay,
-    make_train_env, make_eval_env, make_logger, make_score, make_video, args):
+    make_train_env, make_eval_env, make_logger, make_score, make_video, args,
+    make_val_replay=None):
 
   agent = make_agent()
   train_replay = make_train_replay()
+  # Held-out demo episodes; when present they replace the env rollout as eval/*.
+  val_replay = make_val_replay() if make_val_replay else None
   logger = make_logger()
   get_score = make_score()
   get_video = make_video()
@@ -119,6 +122,10 @@ def train_eval(
       bind(train_replay.dataset, args.batch_size, args.batch_length))
   dataset_report = agent.dataset(
       bind(train_replay.dataset, args.batch_size, args.batch_length_eval))
+  dataset_val = None
+  if val_replay is not None and len(val_replay):
+    dataset_val = agent.dataset(
+        bind(val_replay.dataset, args.batch_size, args.batch_length_eval))
 
   print('Start training loop')
   train_policy = lambda *args: agent.policy(*args, mode='train')
@@ -216,11 +223,17 @@ def train_eval(
         if 'openloop/vector' in mets:
           mets['openloop/vector'] = vector2img(mets['openloop/vector'])
         logger.add(mets, prefix='report')
-      if len(eval_replay):
-        mets, _ = agent.report(next(dataset_eval), carry_report)  
+      if dataset_val is not None:
+        mets, _ = agent.report(next(dataset_val), carry_report)
         if 'openloop/vector' in mets:
           mets['openloop/vector'] = vector2img(mets['openloop/vector'])
         logger.add(mets, prefix='eval')
+      if len(eval_replay):
+        if dataset_val is None:
+          mets, _ = agent.report(next(dataset_eval), carry_report)
+          if 'openloop/vector' in mets:
+            mets['openloop/vector'] = vector2img(mets['openloop/vector'])
+          logger.add(mets, prefix='eval')
         eval_driver.close()
       print('End evaluation')
 
