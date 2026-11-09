@@ -280,6 +280,8 @@ class LeapModelVisualizer:
     scalars = figure_to_image(fig2)
     plt.close(fig2)
 
+    heads = self.render_heads(outs, view, step, length, num_obs, pos_layout)
+
     openl_note = (
         f'{mse_openl:.6g}' if step >= num_obs and not np.isnan(mse_openl)
         else 'n/a (step < open-loop context)')
@@ -296,7 +298,82 @@ class LeapModelVisualizer:
         f'  cont gt / recon:       {outs["cont_gt"][step]:.4f} / '
         f'{outs["cont_recon"][step]:.4f}\n'
     )
-    return image, scalars, metrics
+    return image, scalars, heads, metrics
+
+  def render_heads(self, outs, view, step, length, num_obs, pos_layout):
+    """Open loop of every ensemble prior held fixed, plus per-prior MSE."""
+    field = 'forces_local' if view.startswith('Forces') else 'positions'
+    mse_key = 'forces' if field == 'forces_local' else 'positions'
+    if f'{field}_openl_heads' not in outs:
+      fig, ax = plt.subplots(figsize=(6, 1.5))
+      ax.text(0.5, 0.5, 'World model has a single prior (ensemble=1)',
+              ha='center', va='center')
+      ax.set_axis_off()
+      image = figure_to_image(fig)
+      plt.close(fig)
+      return image
+
+    gt = outs[f'{field}_gt']
+    heads = outs[f'{field}_openl_heads']
+    mse = outs[f'{mse_key}_mse_openl_heads']
+    num_heads = heads.shape[0]
+    t = np.arange(length)
+    colors = plt.get_cmap('tab10')(np.arange(num_heads) % 10)
+
+    ncols = 4
+    nrows = int(np.ceil((num_heads + 1) / ncols))
+    fig = plt.figure(figsize=(14, 2.2 * nrows + 3.6), constrained_layout=True)
+    grid = fig.add_gridspec(nrows + 1, ncols)
+
+    gt_mag = taxel_magnitude(gt[step])
+    head_mag = taxel_magnitude(heads[:, step])
+    openl_valid = step >= num_obs
+    vmax = max(gt_mag.max(), np.nanmax(head_mag) if openl_valid else 0, 1e-8)
+    sc = scatter_taxels(
+        fig.add_subplot(grid[0, 0]), pos_layout, gt_mag, 'Ground truth',
+        vmax=vmax)
+    for j in range(num_heads):
+      ax = fig.add_subplot(grid[(j + 1) // ncols, (j + 1) % ncols])
+      if openl_valid:
+        scatter_taxels(
+            ax, pos_layout, head_mag[j],
+            f'Prior {j}  mse={mse[j, step]:.4g}', vmax=vmax)
+      else:
+        ax.text(0.5, 0.5, f'Prior {j}\nopen loop starts at {num_obs}',
+                ha='center', va='center', transform=ax.transAxes)
+        ax.set_axis_off()
+    fig.colorbar(sc, ax=fig.axes, shrink=0.6, label=f'||{field}||')
+
+    ax_mse = fig.add_subplot(grid[nrows, :ncols // 2])
+    for j in range(num_heads):
+      ax_mse.plot(t, mse[j], color=colors[j], label=f'prior {j}')
+    ax_mse.plot(t, outs[f'{mse_key}_mse_openl'], 'k--', label='sampled per step')
+    ax_mse.plot(t, np.nanmean(mse, 0), 'k', linewidth=2, label='mean of priors')
+    ax_mse.axvline(step, color='gray', linestyle=':')
+    ax_mse.set_xlabel('Step in window')
+    ax_mse.set_ylabel('MSE')
+    ax_mse.set_title(f'Open-loop {mse_key} MSE per prior')
+    ax_mse.legend(fontsize=7, ncol=2)
+
+    ax_mag = fig.add_subplot(grid[nrows, ncols // 2:])
+    ax_mag.plot(t, taxel_magnitude(gt).mean(-1), 'k', linewidth=2, label='gt')
+    head_curve = taxel_magnitude(heads).mean(-1)
+    for j in range(num_heads):
+      ax_mag.plot(t, head_curve[j], color=colors[j], label=f'prior {j}')
+    ax_mag.fill_between(
+        t, np.nanmin(head_curve, 0), np.nanmax(head_curve, 0),
+        color='gray', alpha=0.2, label='prior spread')
+    ax_mag.axvline(num_obs, color='red', linestyle='--', linewidth=1,
+                   label='open loop start')
+    ax_mag.axvline(step, color='gray', linestyle=':')
+    ax_mag.set_xlabel('Step in window')
+    ax_mag.set_ylabel(f'mean taxel ||{field}||')
+    ax_mag.set_title('Open-loop trajectory per prior')
+    ax_mag.legend(fontsize=7, ncol=2)
+
+    image = figure_to_image(fig)
+    plt.close(fig)
+    return image
 
 
 def build_app(viz: LeapModelVisualizer) -> gr.Blocks:
@@ -329,6 +406,7 @@ def build_app(viz: LeapModelVisualizer) -> gr.Blocks:
     run_btn = gr.Button('Run inference', variant='primary')
     spatial = gr.Image(label='Spatial predictions')
     scalars = gr.Image(label='Reward & continuation')
+    heads = gr.Image(label='Open loop per ensemble prior')
     metrics = gr.Textbox(label='Metrics', lines=12)
 
     def on_episode_change(name):
@@ -345,12 +423,12 @@ def build_app(viz: LeapModelVisualizer) -> gr.Blocks:
     run_btn.click(
         on_run,
         [episode, window_start, step, view, logdir, data_dir],
-        [spatial, scalars, metrics])
+        [spatial, scalars, heads, metrics])
     for ctrl in (episode, window_start, step, view):
       ctrl.change(
           on_run,
           [episode, window_start, step, view, logdir, data_dir],
-          [spatial, scalars, metrics])
+          [spatial, scalars, heads, metrics])
 
   return demo
 

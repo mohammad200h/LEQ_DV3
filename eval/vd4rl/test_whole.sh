@@ -13,13 +13,13 @@ df .
 
 conda activate IQL
 # Use local WANDB key (do not hardcode another user's key).
-if [ -f /workspace/LEQ/docker/.env ]; then
+if [ -f /workspace/LeapXELA_Hardware_ws/LEQ_DV3/.env ]; then
   set -a
   # shellcheck disable=SC1091
-  source /workspace/LEQ/docker/.env
+  source /workspace/LeapXELA_Hardware_ws/LEQ_DV3/.env
   set +a
 fi
-: "${WANDB_API_KEY:?Set WANDB_API_KEY (e.g. in /workspace/LEQ/docker/.env)}"
+: "${WANDB_API_KEY:?Set WANDB_API_KEY (e.g. in /workspace/LeapXELA_Hardware_ws/LEQ_DV3/.env)}"
 export WANDB_API_KEY
 ps -eo nlwp | tail -n +2 | awk '{ num_threads += $1 } END { print num_threads }'
 #rm -r logdir/$ALGO/$TASK/$EXPECTILE/$SEED/

@@ -19,7 +19,7 @@ Task name is `leap_<folder>`, e.g. `leap_squeeze` reads `data/leap/squeeze/*.npz
 ## 0. Prerequisites
 
 - GPU, JAX, and the `LEQ_DV3` Python env (`pip install -e .` from `LEQ_DV3`).
-- W&B (optional but on by default). Put `WANDB_API_KEY` in `/workspace/LEQ/docker/.env` or the environment.
+- W&B (optional but on by default). Put `WANDB_API_KEY` in `/workspace/LeapXELA_Hardware_ws/LEQ_DV3/.env` or the environment.
   - Override: `WANDB_PROJECT`, `WANDB_NAME`, or `WANDB_ENABLE=False`.
 - Do **not** reuse a world-model checkpoint trained on all-zero rewards for LEQ. After you collect reward data, reconvert and retrain the WM.
 

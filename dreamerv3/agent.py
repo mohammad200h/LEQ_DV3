@@ -725,6 +725,8 @@ class Agent(nj.Module):
         print(value.shape)
         if BB == 4: value = value[0]
         '''
+      if key == 'forces_local':
+        value = jaxutils.norm_forces(value, self.config.forces_norm)
       result[key] = value
     result['cont'] = 1.0 - f32(result['is_terminal'])
     return result

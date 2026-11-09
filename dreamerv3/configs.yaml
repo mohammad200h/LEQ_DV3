@@ -17,6 +17,13 @@ defaults:
     name: ''  # default: {algo}_{task}_{seed}
     key: ''   # optional; otherwise uses WANDB_API_KEY / cached login
 
+  # Per-channel (x, y, z) z-score of forces_local in preprocess; on for mechanical_pen.
+  forces_norm: {enable: False, mean: [0.0, 0.0, 0.0], std: [1.0, 1.0, 1.0]}
+
+  # Fraction of offline demo files held out (fixed seed) and reported as eval/*
+  # in train_eval instead of the env rollout. 0 = no split.
+  val_frac: 0.0
+
   replay:
     size: 5e6
     online: False
@@ -317,6 +324,35 @@ leap:
   enc.spaces: 'forces_local|positions'
   dec.spaces: 'forces_local|positions'
   # Reward is always 0 in LeapFlexEnv; reconstruction + RSSM are the signal.
+  loss_scales.reward: 1.0
+  loss_scales.actor: 0.0
+  loss_scales.critic: 0.0
+  loss_scales.value: 0.0
+
+mechanical_pen:
+  <<: *size12m
+  task: leap_mechanical_pen
+  opt.lr: 1e-4
+  opt.schedule: cosine
+  opt.anneal: 5e4
+  run.steps: 5e4
+  run.script: train_eval
+  run.num_envs: 1
+  run.num_envs_eval: 1
+  run.eval_eps: 1
+  run.eval_every: 500
+  run.log_every: 60
+  run.save_every: 300
+  run.driver_parallel: False
+  enc.spaces: 'forces_local|positions'
+  dec.spaces: 'forces_local|positions'
+  # Sparsh-skin z-score of the Xela counts (sparsh_stats.json of compose_playbacks/sparsh_skin).
+  forces_norm.enable: True
+  forces_norm.mean: [6.1331, 8.4556, 28.8512]
+  forces_norm.std: [140.4322, 94.8270, 145.6174]
+  # Hold out 10% of the demo episodes; eval/* reports on them (the Leap env is a zero stub).
+  val_frac: 0.1
+  # Hardware pen demos (ros_ws/.../compose_playbacks/DV3); reward in [-1, 0].
   loss_scales.reward: 1.0
   loss_scales.actor: 0.0
   loss_scales.critic: 0.0

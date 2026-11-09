@@ -79,7 +79,10 @@ def main(argv=None):
         bind(make_logger, config),
         bind(make_score, config),
         bind(make_video, config),
-        args)
+        args,
+        make_val_replay=(
+            bind(make_replay, config, 'val_replay', split='val')
+            if config.val_frac > 0 else None))
 
   elif args.script == 'train_holdout':
     assert config.eval_dir
@@ -203,7 +206,20 @@ def make_logger(config):
   logger = embodied.Logger(step, loggers, multiplier)
   return logger
 
-def make_replay(config, directory=None, is_eval=False, rate_limit=False):
+def split_demos(fnames, val_frac, seed=0):
+  """Deterministic episode-level (one chunk file per episode) train/val split."""
+  fnames = sorted(fnames)
+  if val_frac <= 0 or not fnames:
+    return fnames, []
+  perm = np.random.default_rng(seed).permutation(len(fnames))
+  nval = max(1, int(round(len(fnames) * val_frac)))
+  val = set(perm[:nval].tolist())
+  train = [f for i, f in enumerate(fnames) if i not in val]
+  return train, [f for i, f in enumerate(fnames) if i in val]
+
+
+def make_replay(
+    config, directory=None, is_eval=False, rate_limit=False, split='train'):
   directory = directory and embodied.Path(config.logdir) / directory
   size = int(config.replay.size / 10 if is_eval else config.replay.size)
   length = config.replay_length_eval if is_eval else config.replay_length
@@ -276,6 +292,19 @@ def make_replay(config, directory=None, is_eval=False, rate_limit=False):
             fnames = glob.glob(os.path.join(os.getcwd(), f'./data/d4rl/{task}-{diff}-v2/*.npz'))
     else:
         fnames = glob.glob(os.path.join(os.getcwd(), f'./data/d4rl/{task}-{diff}-v2/*.npz'))
+  if config.val_frac > 0:
+    train_fnames, val_fnames = split_demos(fnames, config.val_frac)
+    fnames = val_fnames if split == 'val' else train_fnames
+    print(f'Demo split ({split}): {len(fnames)} of '
+          f'{len(train_fnames) + len(val_fnames)} files')
+    # Drop links left in this logdir by an earlier run with a different split.
+    keep = {os.path.basename(f) for f in fnames}
+    for link in glob.glob(os.path.join(directory, '*.npz')):
+      if os.path.islink(link) and os.path.basename(link) not in keep:
+        os.remove(link)
+    if split == 'val':
+      with open(os.path.join(config.logdir, 'val_files.txt'), 'w') as f:
+        f.write('\n'.join(sorted(keep)) + '\n')
   for traj in fnames:
     filename = os.path.basename(traj)
     #filename = filename[:32] + "-" + filename[32:]

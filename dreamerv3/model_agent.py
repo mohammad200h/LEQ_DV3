@@ -416,7 +416,11 @@ class Agent(nj.Module):
     reward_openl = pad_time(openl_rew.mode())
     cont_openl = pad_time(openl_con.mean())
 
-    gt_forces = f32(data['forces_local'])
+    # Forces back in Xela counts (preprocess normalized them), MSEs included.
+    norm = self.config.forces_norm
+    recon_forces = jaxutils.denorm_forces(recon_forces, norm)
+    openl_forces_full = jaxutils.denorm_forces(openl_forces_full, norm)
+    gt_forces = f32(jaxutils.denorm_forces(data['forces_local'], norm))
     gt_positions = f32(data['positions'])
     forces_mse_recon = jnp.square(recon_forces - gt_forces).mean(axis=(-2, -1))
     positions_mse_recon = jnp.square(
@@ -430,8 +434,32 @@ class Agent(nj.Module):
     forces_mse_openl = jnp.where(openl_mask, forces_mse_openl, jnp.nan)
     positions_mse_openl = jnp.where(openl_mask, positions_mse_openl, jnp.nan)
 
+    # Same open-loop rollout with each ensemble prior held fixed: (B, E, T, ...)
+    heads = {}
+    if self.dyn.ensemble > 1:
+      head_forces, head_positions = [], []
+      for j in range(self.dyn.ensemble):
+        _, head_outs = self.dyn.imagine(img_start, img_acts, head=j)
+        head_dec = self.dec(head_outs)
+        head_forces.append(jaxutils.denorm_forces(
+            pad_time(head_dec['forces_local'].mode()), norm))
+        head_positions.append(pad_time(head_dec['positions'].mode()))
+      head_forces = jnp.stack(head_forces, 1)
+      head_positions = jnp.stack(head_positions, 1)
+      mask = openl_mask[:, None]
+      heads = {
+          'forces_local_openl_heads': head_forces,
+          'positions_openl_heads': head_positions,
+          'forces_mse_openl_heads': jnp.where(mask, jnp.square(
+              head_forces - gt_forces[:, None]).mean(axis=(-2, -1)), jnp.nan),
+          'positions_mse_openl_heads': jnp.where(mask, jnp.square(
+              head_positions - gt_positions[:, None]).mean(axis=(-2, -1)),
+              jnp.nan),
+      }
+
     newact = {k: data[k][:, -1] for k in self.act_space}
     return {
+        **heads,
         'forces_local_gt': gt_forces,
         'positions_gt': gt_positions,
         'forces_local_recon': recon_forces,
@@ -473,6 +501,8 @@ class Agent(nj.Module):
         #value = (value >= 0.05).astype(value.dtype)
         print(value.shape)
         '''
+      if key == 'forces_local':
+        value = jaxutils.norm_forces(value, self.config.forces_norm)
       result[key] = value
     result['cont'] = 1.0 - f32(result['is_terminal'])
     return result
