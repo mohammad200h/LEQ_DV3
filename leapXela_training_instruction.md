@@ -190,7 +190,21 @@ Do not pass `--algo model` here. Do not start LEQ until:
 DITTO is a separate stage-2 agent on the same frozen world model. It does not use the reward head. See `Ditto_DV3_Implementation.md` and:
 
 ```bash
-./eval/leap/train_ditto.sh 0 0 leap_squeeze
+./eval/leap/train_ditto.sh 0 0 leap_mechanical_pen
+```
+
+To train at a lower rate (default 20 Hz), resample the chunks and use the new folder's task name. Each rate needs its own world model:
+
+```bash
+python3 data/leap/resample_chunks.py --hz 20
+./eval/mechanical_pen/train_model.sh 0 0 leap_mechanical_pen_20hz
+./eval/leap/train_ditto.sh 0 0 leap_mechanical_pen_20hz
+```
+
+To watch a trained policy inside its world model, with decoded forces and hand positions, and no sim or hand:
+
+```bash
+./eval/leap/rollout_leq_wm.sh 0 logdir/ditto/leap_mechanical_pen/0
 ```
 
 ---

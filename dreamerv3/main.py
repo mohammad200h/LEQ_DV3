@@ -220,6 +220,16 @@ def split_demos(fnames, val_frac, seed=0):
   return train, [f for i, f in enumerate(fnames) if i in val]
 
 
+def filter_expert_files(fnames, min_reward):
+  """Episode files whose final-step reward is at least min_reward (DITTO's expert)."""
+  kept = []
+  for fname in fnames:
+    with np.load(fname) as episode:
+      if episode['reward'][-1] >= min_reward:
+        kept.append(fname)
+  return kept
+
+
 def make_replay(
     config, directory=None, is_eval=False, rate_limit=False, split='train'):
   directory = directory and embodied.Path(config.logdir) / directory
@@ -299,6 +309,19 @@ def make_replay(
     fnames = val_fnames if split == 'val' else train_fnames
     print(f'Demo split ({split}): {len(fnames)} of '
           f'{len(train_fnames) + len(val_fnames)} files')
+  if config.algo == 'ditto':
+    # The world model trains on every episode. DITTO's reward pulls the policy
+    # toward whatever it is given, so only successes count as expert.
+    total = len(fnames)
+    fnames = filter_expert_files(fnames, config.ditto_expert_min_reward)
+    print(f'DITTO expert episodes ({split}): kept {len(fnames)}, '
+          f'dropped {total - len(fnames)} with final reward below '
+          f'{config.ditto_expert_min_reward}')
+    if not fnames:
+      raise ValueError(
+          f'No {split} episodes reach ditto_expert_min_reward='
+          f'{config.ditto_expert_min_reward}. Check the rewards in the chunks.')
+  if config.val_frac > 0 or config.algo == 'ditto':
     # Drop links left in this logdir by an earlier run with a different split.
     keep = {os.path.basename(f) for f in fnames}
     for link in glob.glob(os.path.join(directory, '*.npz')):

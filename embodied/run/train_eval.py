@@ -118,6 +118,8 @@ def train_eval(
   # DITTO encodes each episode from its real start before any batch is sampled.
   if hasattr(agent, 'cache_expert_states'):
     agent.cache_expert_states(train_replay)
+    if val_replay is not None and len(val_replay):
+      agent.cache_expert_states(val_replay)
   dataset_train = agent.dataset(
       bind(train_replay.dataset, args.batch_size, args.batch_length))
   dataset_report = agent.dataset(

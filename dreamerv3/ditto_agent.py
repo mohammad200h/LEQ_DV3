@@ -496,15 +496,16 @@ class Agent(nj.Module):
     expert_deter = _window(f32(data['expert_deter']))
     expert_stoch = _window(jax.nn.one_hot(
         data['expert_stoch'], classes).astype(f32))
+    expert_action = _window(f32(data['action']))
     # imagine() returns the compute dtype (bfloat16). The scan carry must match.
     startlat = cast({'deter': expert_deter[:, 0], 'stoch': expert_stoch[:, 0]})
     startout = cast({'deter': expert_deter[:, 0], 'stoch': expert_stoch[:, 0]})
 
     if self.config.imag_repeat > 1:
       N = self.config.imag_repeat
-      startlat, startout, expert_deter, expert_stoch = treemap(
+      startlat, startout, expert_deter, expert_stoch, expert_action = treemap(
           lambda x: x.repeat(N, 0),
-          (startlat, startout, expert_deter, expert_stoch))
+          (startlat, startout, expert_deter, expert_stoch, expert_action))
     startact, startlogpi, startlogpi_sg = actor_sample(
         self.actor(startout, bdims=1), self.actor_dists)
     _, (imag_outs, acts, logpis, logpis_sg) = jaxutils.scan(
@@ -547,8 +548,9 @@ class Agent(nj.Module):
     policy_loss = (-logpi[:, :-1] * sg(adv[:, :-1])).mean()
     actor_dist = self.actor(states)
     entropy = sum(dist.entropy() for dist in actor_dist.values()).mean()
-    # 0.05 is the coefficient hardcoded in the released trainer's train().
-    losses['actor'] = policy_loss - f32(0.05) * entropy
+    # The released trainer hardcodes 0.05 for an 18-way categorical. On 16
+    # Gaussian log-stds that drives std to maxstd, so the coefficient is a config.
+    losses['actor'] = policy_loss - f32(self.config.actent) * entropy
 
     value_loss = 0.5 * jnp.square(v[:, :-1] - sg(ret[:, :-1])).mean()
     losses['value'] = f32(0.01) * value_loss
@@ -572,6 +574,23 @@ class Agent(nj.Module):
     metrics.update(jaxutils.tensorstats(rew, 'rew'))
     metrics['ditto/reward'] = scored.mean()
     metrics['ditto/latent_distance'] = (1.0 - scored).mean()
+    # Actions the deployed policy (the mode) would take along the imagined
+    # rollout, against the expert's at the same step.
+    mode_action = jnp.tanh(actor_dist['action'].mode())
+    metrics['ditto/action_mse'] = jnp.square(
+        mode_action[:, :-1] - expert_action[:, :-1]).mean()
+    metrics['ditto/action_step'] = jnp.abs(
+        mode_action[:, 1:] - mode_action[:, :-1]).mean()
+    metrics['ditto/expert_action_step'] = jnp.abs(
+        expert_action[:, 1:] - expert_action[:, :-1]).mean()
+    if not update:
+      # Reference for ditto/reward: the score of replaying the expert's actions
+      # through the same prior. Report and eval only, to keep training steps cheap.
+      _, expert_outs = self.dyn.imagine(
+          startlat, {'action': cast(expert_action[:, :-1])})
+      metrics['ditto/expert_reward'] = ditto_latent_reward(
+          {'deter': f32(expert_outs['deter'])},
+          {'deter': expert_deter[:, 1:]}).mean()
     metrics.update(jaxutils.tensorstats(weight, 'weight'))
     metrics.update(jaxutils.tensorstats(val, 'val'))
     metrics.update(jaxutils.tensorstats(ret, 'ret'))
@@ -718,6 +737,8 @@ class Agent(nj.Module):
         print(value.shape)
         if BB == 4: value = value[0]
         '''
+      if key == 'forces_local':
+        value = jaxutils.norm_forces(value, self.config.forces_norm)
       result[key] = value
     result['cont'] = 1.0 - f32(result['is_terminal'])
     return result
