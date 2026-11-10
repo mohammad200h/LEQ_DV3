@@ -4,7 +4,8 @@
 # Data is already in DreamerV3 chunk format (no convert_episodes.py step):
 #   data/leap/mechanical_pen -> ros_ws/demonstrations/compose_playbacks/DV3
 #
-# Usage: ./eval/mechanical_pen/train_model.sh [GPU] [SEED] [TASK]
+# Usage: ./eval/mechanical_pen/train_model.sh [GPU] [SEED] [TASK] [extra main.py flags...]
+#   Writes logdir/model/<TASK>/0/<SEED>/ unless LOGDIR is set.
 #
 # W&B (on by default): set WANDB_API_KEY in /workspace/LeapXELA_Hardware_ws/LEQ_DV3/.env or the
 # environment. Override with WANDB_PROJECT / WANDB_NAME, or WANDB_ENABLE=False.
@@ -15,6 +16,8 @@ SEED=${2:-0}
 TASK=${3:-leap_mechanical_pen}
 SUITE=mechanical_pen
 ALGO=model
+EXTRA_FLAGS=("${@:4}")
+LOGDIR=${LOGDIR:-logdir/$ALGO/$TASK/0/$SEED}
 WANDB_ENABLE=${WANDB_ENABLE:-True}
 WANDB_PROJECT=${WANDB_PROJECT:-dreamerv3_LEQ}
 WANDB_NAME=${WANDB_NAME:-${ALGO}_${TASK}_${SEED}}
@@ -52,11 +55,12 @@ fi
 echo "CUDA_VISIBLE_DEVICES=$GPU XLA_PYTHON_CLIENT_MEM_FRACTION=$XLA_MEM_FRACTION python3 dreamerv3/main.py --configs $SUITE --task $TASK --algo $ALGO --seed $SEED --wandb.enable $WANDB_ENABLE --wandb.project $WANDB_PROJECT --wandb.name $WANDB_NAME"
 CUDA_VISIBLE_DEVICES=$GPU \
   python3 dreamerv3/main.py \
-    --logdir "logdir/$ALGO/$TASK/0/$SEED" \
+    --logdir "$LOGDIR" \
     --configs "$SUITE" \
     --task "$TASK" \
     --algo "$ALGO" \
     --seed "$SEED" \
     --wandb.enable "$WANDB_ENABLE" \
     --wandb.project "$WANDB_PROJECT" \
-    --wandb.name "$WANDB_NAME"
+    --wandb.name "$WANDB_NAME" \
+    "${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}"

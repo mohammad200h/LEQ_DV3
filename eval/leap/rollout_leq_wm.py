@@ -190,12 +190,17 @@ def compute_curves(episode, streams, start, end):
   real_positions = episode['positions'][start:end].astype(np.float32)
   expert_actions = episode['action'][start:end].astype(np.float32)
   expert_deter = streams['posterior']['deter'][start:end]
+  # Mean taxel movement between consecutive frames, in mm. Jitter in the decoded hand shows
+  # up here as movement the real hand doesn't make.
+  position_step = lambda p: 1000.0 * np.linalg.norm(np.diff(p, axis=0), axis=-1).mean(-1)
   curves = {
       'real_force_norm': np.linalg.norm(real_forces, axis=-1).mean(-1),
+      'real_position_step_mm': position_step(real_positions),
       'expert_action_step': np.abs(np.diff(expert_actions[:-1], axis=0)).mean(-1),
   }
   for name in ('policy', 'expert'):
     stream = streams[name]
+    curves[f'{name}_position_step_mm'] = position_step(stream['positions'])
     curves[f'{name}_force_norm'] = np.linalg.norm(stream['forces'], axis=-1).mean(-1)
     curves[f'{name}_force_rmse'] = np.sqrt(np.square(stream['forces'] - real_forces).mean((1, 2)))
     curves[f'{name}_position_error_mm'] = 1000.0 * np.linalg.norm(
@@ -218,6 +223,7 @@ def summarize(curves, episode, start, end, hz):
         'position_error_mm': float(curves[f'{name}_position_error_mm'].mean()),
         'position_error_mm_last_5pct': float(curves[f'{name}_position_error_mm'][-tail:].mean()),
         'predicted_reward_last_5pct': float(curves[f'{name}_reward'][-tail:].mean()),
+        'position_step_mm': float(curves[f'{name}_position_step_mm'].mean()),
     }
 
   return {
@@ -229,6 +235,7 @@ def summarize(curves, episode, start, end, hz):
       'policy': stats('policy'),
       'expert_actions': stats('expert'),
       'policy_action_rmse_rad': float(curves['policy_action_rmse_rad'].mean()),
+      'real_position_step_mm': float(curves['real_position_step_mm'].mean()),
       'policy_action_step': float(curves['policy_action_step'].mean()),
       'expert_action_step': float(curves['expert_action_step'].mean()),
   }
