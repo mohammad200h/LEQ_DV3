@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from posterior_sweep_summary import summarize  # noqa: E402
 
 # (key, header, format, lower is better)
-METRICS = [
+POSTERIOR_METRICS = [
     ('post_classes', 'Posterior classes/var, held-out', '{:.2f}', True),
     ('prior_classes', 'Prior classes/var, held-out', '{:.2f}', True),
     ('forces', 'Forces recon, held-out', '{:.2f}', True),
@@ -37,6 +37,44 @@ METRICS = [
     ('post_cmd_step', 'Policy-on-posterior command change/step', '{:.4f}', True),
     ('post_cmd_err', 'Policy-on-posterior command error (rad)', '{:.3f}', True),
 ]
+
+# For comparing datasets at different rates: ratios are rate-free.
+JITTER_METRICS = [
+    ('hz', 'Data rate (Hz)', '{:.0f}', None),
+    ('post_jitter', 'Policy jitter on posterior (x expert)', '{:.2f}', True),
+    ('prior_jitter', 'Policy jitter in prior (x expert)', '{:.2f}', True),
+    ('post_cmd_per_s', 'Policy-on-posterior command change (/s)', '{:.3f}', True),
+    ('expert_cmd_per_s', 'Expert command change (/s)', '{:.3f}', None),
+    ('wm_motion_ratio', 'World-model hand motion, expert actions (x real)', '{:.2f}', True),
+    ('post_motion_ratio', 'Posterior hand motion (x real)', '{:.2f}', True),
+    ('post_cmd_err', 'Policy-on-posterior command error (rad)', '{:.3f}', True),
+    ('expert_pos_err', 'World-model position error, expert actions (mm)', '{:.2f}', True),
+    ('forces', 'Forces recon, held-out', '{:.2f}', True),
+]
+
+METRIC_SETS = {'posterior': POSTERIOR_METRICS, 'jitter': JITTER_METRICS}
+
+JITTER_GUIDE = """\
+## Jerkiness measures
+
+Rates differ between datasets, so most columns are ratios that don't depend on the rate.
+For every ratio, **1.0 means as smooth as the reference** and bigger means jerkier.
+
+- **Policy jitter (x expert):** how much the policy's joint command changes per step,
+  divided by how much the demonstrator's command changes per step. *On posterior* is the
+  policy fed real sensor readings, as on the hand; *in prior* is the policy acting inside
+  the world model's imagination.
+- **Command change (/s):** the same change in commands, per second instead of per step,
+  for the policy and for the expert.
+- **World-model hand motion (x real):** the world model is given the expert's own
+  commands and imagines the hand. This is how far its imagined fingertips move per step,
+  divided by how far the real fingertips moved. Above 1 means the world model's imagined
+  hand shakes more than the real one.
+- **Posterior hand motion (x real):** the same, but with the world model watching the real
+  sensors, so it measures the decoding jitter alone.
+- **Command error** and **position error** measure accuracy, not smoothness: lower is
+  better.
+"""
 
 GUIDE = """\
 ## How to read this page
@@ -52,8 +90,9 @@ the random draws of `z`. Changing only the seed shows how much a result moves by
 - A difference between two settings is believable when it is clearly bigger than their
   ± values. If the ranges overlap (mean ± spread of one reaches the other), the
   difference may be chance.
-- **Lower is better** for every column except DITTO reward (higher is better) and KL
-  (no good direction; it describes how much the posterior and prior disagree).
+- Which direction is better is given in each panel title of `summary.png`. DITTO reward
+  is the one column where higher is better; KL, data rate and the expert's own values
+  have no better direction.
 
 The column meanings are explained in each sweep's own `summary.md`.
 `summary.png` shows each seed as a small dot and the mean as a large dot with a bar
@@ -66,8 +105,14 @@ def main():
   parser.add_argument('--sweeps', type=Path, nargs='+', required=True)
   parser.add_argument('--configs', nargs='+', required=True)
   parser.add_argument('--out', type=Path, required=True)
+  parser.add_argument('--metrics', choices=sorted(METRIC_SETS), default='posterior',
+                      help='posterior: certainty of z; jitter: jerkiness across datasets')
   args = parser.parse_args()
   args.out.mkdir(parents=True, exist_ok=True)
+  METRICS = METRIC_SETS[args.metrics]
+  title = {'posterior': '# Posterior sweep over seeds',
+           'jitter': '# Data sweep over seeds: jerkiness'}[args.metrics]
+  guide = GUIDE + ('\n' + JITTER_GUIDE if args.metrics == 'jitter' else '')
 
   # values[name][key] = one value per seed that finished.
   values = {}
@@ -83,7 +128,7 @@ def main():
       return math.nan, math.nan
     return float(v.mean()), float(v.std(ddof=1)) if len(v) > 1 else math.nan
 
-  lines = ['# Posterior sweep over seeds', '', *GUIDE.splitlines(), '', '## Results', '',
+  lines = [title, '', *guide.splitlines(), '', '## Results', '',
            'Sweeps: ' + ', '.join(f'`{s}`' for s in args.sweeps), '',
            '| Setting | Seeds | ' + ' | '.join(h for _, h, _, _ in METRICS) + ' |',
            '|' + '---|' * (len(METRICS) + 2)]
@@ -100,9 +145,15 @@ def main():
     lines.append(f'| {name} | {values[name]["seeds"]} | ' + ' | '.join(cells) + ' |')
   (args.out / 'summary.md').write_text('\n'.join(lines) + '\n')
 
-  fig, axes = plt.subplots(2, 4, figsize=(18, 8), constrained_layout=True)
+  cols = 4
+  nrows = math.ceil(len(METRICS) / cols)
+  fig, axes = plt.subplots(nrows, cols, figsize=(18, 4 * nrows), constrained_layout=True)
+  for ax in axes.flat[len(METRICS):]:
+    ax.set_axis_off()
   x = np.arange(len(args.configs))
   for ax, (key, header, _, lower) in zip(axes.flat, METRICS):
+    if lower and key.endswith(('_jitter', '_ratio')):
+      ax.axhline(1.0, color='#6b6a65', ls='--', lw=1.2, zorder=1)  # As smooth as the reference.
     hint = {True: ' (lower is better)', False: ' (higher is better)', None: ''}[lower]
     ax.set_title(header + hint, fontsize=10, loc='left')
     for i, name in enumerate(args.configs):

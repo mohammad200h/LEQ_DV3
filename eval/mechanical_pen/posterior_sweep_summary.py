@@ -230,6 +230,17 @@ def summarize(sweep: Path, name: str) -> dict:
   row['post_motion'] = mean(lambda m: m['posterior']['position_step_mm'] * m['hz'])
   row['real_motion'] = mean(lambda m: m['real_position_step_mm'] * m['hz'])
   row['expert_pos_err'] = mean(lambda m: m['expert_actions']['position_error_mm'])
+  # Rate-free jerkiness: 1 means as smooth as the expert or the real hand.
+  row['hz'] = mean(lambda m: m['hz'])
+  row['post_jitter'] = mean(
+      lambda m: m['posterior_policy_action_step'] / m['expert_action_step'])
+  row['prior_jitter'] = mean(lambda m: m['policy_action_step'] / m['expert_action_step'])
+  row['wm_motion_ratio'] = mean(
+      lambda m: m['expert_actions']['position_step_mm'] / m['real_position_step_mm'])
+  row['post_motion_ratio'] = mean(
+      lambda m: m['posterior']['position_step_mm'] / m['real_position_step_mm'])
+  row['post_cmd_per_s'] = mean(lambda m: m['posterior_policy_action_step'] * m['hz'])
+  row['expert_cmd_per_s'] = mean(lambda m: m['expert_action_step'] * m['hz'])
   return row
 
 
