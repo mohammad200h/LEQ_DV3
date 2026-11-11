@@ -19,6 +19,11 @@ defaults:
 
   # Per-channel (x, y, z) z-score of forces_local in preprocess; on for mechanical_pen.
   forces_norm: {enable: False, mean: [0.0, 0.0, 0.0], std: [1.0, 1.0, 1.0]}
+  # World model only. forces_loss_scale multiplies the forces decoder loss (on top of
+  # loss_scales.dec_mlp). forces_aug_noise is the std of Gaussian noise added to the
+  # encoder's forces_local input on training steps, in forces_norm z-score units.
+  forces_loss_scale: 1.0
+  forces_aug_noise: 0.0
 
   # Fraction of offline demo files held out (fixed seed) and reported as eval/*
   # in train_eval instead of the env rollout. 0 = no split.

@@ -257,4 +257,6 @@ def train_eval(
     if should_save(step):
       checkpoint.save()
 
+  # The clock alone can leave the last save minutes behind the final step.
+  checkpoint.save()
   logger.close()

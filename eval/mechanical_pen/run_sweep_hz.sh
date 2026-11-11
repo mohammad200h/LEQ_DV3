@@ -2,7 +2,7 @@
 # Control-rate sweep: for each rate, build the data, train a world model, train DITTO on it,
 # roll the policy out inside that world model, then compare the rates.
 #
-# Usage: ./eval/mechanical_pen/rate_sweep.sh
+# Usage: ./eval/mechanical_pen/run_sweep_hz.sh
 #
 # Settings (environment variables):
 #   RATES="10 20 50 80 100"  Rates in Hz, whole numbers up to 100. Rates that divide 100
@@ -17,6 +17,8 @@
 #   IMAG_LENGTH=15           DITTO horizon in steps, so 1.5 s at 10 Hz, 0.15 s at 100 Hz.
 #   SWEEP_DIR=logdir/rate_sweep
 #   WANDB_ENABLE=True        Runs are named rate_sweep_<hz>hz_{model,ditto}.
+#   REDO_ROLLOUT=False       True reruns the rollouts (and GIFs) of finished rates without
+#                            retraining anything, e.g. after changing rollout_leq_wm.py.
 #
 # Time: about 40 minutes per rate on an RTX 4090 at 50k steps, so about 3.5 hours for
 # the 5 default rates on one GPU.
@@ -28,7 +30,9 @@
 # Output in <SWEEP_DIR>/:
 #   sweep.log                   progress
 #   <hz>hz/model/, ditto/       the runs, with model.log and ditto.log
-#   <hz>hz/rollout/<episode>/   rollout_leq_wm.py output
+#   <hz>hz/rollout/<episode>/   rollout_leq_wm.sh output: rollout.gif (real | posterior |
+#                               prior with expert actions | prior with policy, plus jitter
+#                               traces), summary.png, rollout.npz, metrics.json
 #   summary.md, summary.csv, summary.png
 set -euo pipefail
 
@@ -40,6 +44,7 @@ EPISODES=${EPISODES:-3}
 START_SECONDS=${START_SECONDS:-0.8}
 export IMAG_LENGTH=${IMAG_LENGTH:-15}
 SWEEP_DIR=${SWEEP_DIR:-logdir/rate_sweep}
+REDO_ROLLOUT=${REDO_ROLLOUT:-False}
 export WANDB_ENABLE=${WANDB_ENABLE:-True}
 SOURCE_DIR=data/leap/mechanical_pen
 SOURCE_HZ=100
@@ -73,7 +78,8 @@ data_rate() {
 }
 
 # Data first, one rate at a time: it is quick and uses the CPU.
-log "Sweep: rates [$RATES], GPUs [$GPUS], $STEPS steps, H=$IMAG_LENGTH, $EPISODES rollouts"
+log "Sweep: rates [$RATES], GPUs [$GPUS], $STEPS steps, H=$IMAG_LENGTH, $EPISODES rollouts" \
+  "(redo rollouts: $REDO_ROLLOUT)"
 for hz in $RATES; do
   [ "$hz" -eq "$SOURCE_HZ" ] && continue
   out="data/leap/mechanical_pen_${hz}hz"
@@ -119,11 +125,14 @@ run_rate() {
     touch "$dir/ditto/done"
   fi
 
+  if [ "$REDO_ROLLOUT" = True ] && [ -f "$dir/rollout/done" ]; then
+    rm "$dir/rollout/done"
+  fi
   if [ ! -f "$dir/rollout/done" ]; then
-    start=$(python3 -c "print(max(1, round($START_SECONDS * $hz)))")
-    log "${hz} Hz: rolling out $EPISODES episodes from step $start on GPU $gpu"
-    if ! ./eval/leap/rollout_leq_wm.sh "$gpu" "$dir/ditto" --num-episodes "$EPISODES" \
-        --start "$start" --out "$dir/rollout" > "$dir/rollout.log" 2>&1; then
+    log "${hz} Hz: rolling out $EPISODES episodes from ${START_SECONDS} s on GPU $gpu"
+    if ! EPISODES="$EPISODES" START_SECONDS="$START_SECONDS" \
+        ./eval/mechanical_pen/rollout_leq_wm.sh "$gpu" "$dir/ditto" --out "$dir/rollout" \
+        > "$dir/rollout.log" 2>&1; then
       log "${hz} Hz: rollout FAILED, see $dir/rollout.log"
       return
     fi

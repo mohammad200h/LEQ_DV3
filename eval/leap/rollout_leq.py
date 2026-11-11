@@ -50,7 +50,16 @@ def load_agent(logdir: Path):
 
   from ruamel.yaml import YAML
   yaml = YAML(typ='safe')
-  config = embodied.Config(yaml.load(config_path.read_text()))
+  saved = yaml.load(config_path.read_text())
+  # Runs saved before an option was added lack its key, and the agent would fail looking it
+  # up. Fill those from the current defaults; new options default to off.
+  defaults = yaml.load((Path(__file__).resolve().parents[2] / 'dreamerv3' / 'configs.yaml')
+                       .read_text())['defaults']
+  missing = sorted(key for key in defaults if key not in saved)
+  if missing:
+    print(f'Config predates {", ".join(missing)}; using the defaults for these.')
+    saved.update({key: defaults[key] for key in missing})
+  config = embodied.Config(saved)
   config = config.update(logdir=str(logdir))
   agent = make_agent(config)
 

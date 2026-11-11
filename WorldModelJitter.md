@@ -179,11 +179,11 @@ The 10 and 20 Hz checkpoints from the rate sweep are enough for this, with no re
 |---|---|---|
 | Filter on the hardware | Low-pass or rate-limit commands before they are sent. Sensible for safety anyway. | none |
 | Most likely `z` in eval | Make `observe` use the argmax `z` when `mode='eval'`. This matches the expert cache, which already uses argmax ([ditto_agent.py:216](dreamerv3/ditto_agent.py#L216)). | code only |
-| Smoothness penalty | Subtract `c·\|a_t − a_{t−1}\|²` from the DITTO reward. Works directly on cause 1. | DITTO retrain |
+| Smoothness penalty (tried, removed) | Subtract `c·\|a_t − a_{t−1}\|²` from the DITTO reward. At `c` = 10, commands were about 3× smoother but about 50% less accurate. A command filter did as well with no accuracy loss. See Known limits in `Ditto_DV3_Implementation.md`. | DITTO retrain |
 | Behaviour-cloning term | Add a loss pulling the actor toward the expert's actions on real states. The expert's actions are smooth, so this teaches smoothness directly. | DITTO retrain |
 | Previous command as input | Give the actor its previous command, or have it output a change in the command, so holding still is the easy default. | DITTO retrain |
 | `h`-only actor, or `z` probabilities | Feed the actor `deter` alone, or `z`'s probabilities instead of a random draw. Removes `z` noise from its input. | DITTO retrain |
-| Lower control rate | Fewer independent draws and fewer decisions per second. Already being measured by `eval/mechanical_pen/rate_sweep.sh`. | world-model and DITTO retrain |
+| Lower control rate | Fewer independent draws and fewer decisions per second. Already being measured by `eval/mechanical_pen/run_sweep_hz.sh`. | world-model and DITTO retrain |
 | Smoothness loss in the world model | Penalise jumps between consecutive decoded steps. | world-model retrain |
 
 ---
@@ -196,7 +196,8 @@ The 10 and 20 Hz checkpoints from the rate sweep are enough for this, with no re
 
 ## Reproducing the numbers
 
-- Rate sweep: `./eval/mechanical_pen/rate_sweep.sh`, results in `logdir/rate_sweep/summary.{md,csv,png}`.
+- Rate sweep: `./eval/mechanical_pen/run_sweep_hz.sh`, results in `logdir/rate_sweep/summary.{md,csv,png}`.
+- Posterior-certainty sweep: `./eval/mechanical_pen/run_sweep_posterior.sh` retrains the 10 Hz world model with lower `rep`, lower `free`, and a stronger forces decoder loss (alone, with weight decay, with input noise), then trains DITTO on each and rolls it out. Results in `logdir/posterior_sweep_10hz/summary.{md,csv,png}`. `kl/mean` is the unclipped KL, comparable across free-bits settings, unlike `dyn_loss`. It is logged by world models trained after it was added.
 - One rollout: `./eval/leap/rollout_leq_wm.sh <GPU> <DITTO logdir> --num-episodes 3 --start <steps>`. `rollout.npz` holds `policy_action` (prior), `observed_policy_action` (posterior) and `expert_action`.
 - Posterior and prior metrics: the `report/` and `eval/` keys listed above in each `logdir/rate_sweep/<hz>hz/model/metrics.jsonl`, averaged over the last 10 reports.
 - The latent-setting table came from a one-off script on the earlier 100 Hz checkpoint (`logdir/ditto/leap_mechanical_pen/0`). It is not in the repo.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the rates of a rate_sweep.sh run: writes summary.md, summary.csv and summary.png.
+"""Compare the rates of a run_sweep_hz.sh run: writes summary.md, summary.csv and summary.png.
 
   python3 eval/mechanical_pen/rate_sweep_summary.py --sweep logdir/rate_sweep
 
@@ -38,15 +38,19 @@ COLUMNS = [
     ('policy_latent_reward', 'Policy latent reward', '{:.3f}'),
     ('policy_command_error_rad', 'Policy command error (rad)', '{:.3f}'),
     ('policy_command_rate', 'Policy command change (/s)', '{:.3f}'),
+    ('posterior_policy_command_rate', 'Policy-on-posterior command change (/s)', '{:.3f}'),
+    ('posterior_policy_command_error_rad', 'Policy-on-posterior command error (rad)', '{:.3f}'),
     ('expert_command_rate', 'Expert command change (/s)', '{:.4f}'),
     ('policy_motion_mm_s', 'Policy hand motion (mm/s)', '{:.1f}'),
     ('expert_motion_mm_s', 'Expert-action hand motion (mm/s)', '{:.1f}'),
+    ('posterior_motion_mm_s', 'Posterior hand motion (mm/s)', '{:.1f}'),
     ('real_motion_mm_s', 'Real hand motion (mm/s)', '{:.1f}'),
 ]
 
 POLICY = ('Policy in world model', '#2a78d6')
 EXPERT = ('Expert actions in world model', '#eb6834')
 REAL = ('Real episode', '#6b6a65')
+POSTERIOR = ('Posterior (policy on real states)', '#2f9e5a')
 
 
 def last_mean(path: Path, key: str) -> float:
@@ -87,6 +91,13 @@ def summarize_rate(sweep: Path, hz: int, imag_length: int) -> dict:
   # Per-step changes are smaller at higher rates by construction, so compare per second.
   row['policy_command_rate'] = mean(lambda m: m['policy_action_step'] * m['hz'])
   row['expert_command_rate'] = mean(lambda m: m['expert_action_step'] * m['hz'])
+  # Older rollouts lack the posterior stream.
+  row['posterior_policy_command_rate'] = mean(
+      lambda m: m.get('posterior_policy_action_step', math.nan) * m['hz'])
+  row['posterior_policy_command_error_rad'] = mean(
+      lambda m: m.get('posterior_policy_action_rmse_rad', math.nan))
+  row['posterior_motion_mm_s'] = mean(
+      lambda m: m.get('posterior', {}).get('position_step_mm', math.nan) * m['hz'])
   row['real_motion_mm_s'] = mean(lambda m: m.get('real_position_step_mm', math.nan) * m['hz'])
   return row
 
@@ -132,11 +143,15 @@ def plot(rows, sweep: Path):
       ('Force RMSE vs real (counts)', [
           ('policy_force_rmse', POLICY), ('expert_force_rmse', EXPERT)], False),
       ('Command change per second (normalised)', [
-          ('policy_command_rate', POLICY), ('expert_command_rate', REAL)], True),
+          ('policy_command_rate', POLICY), ('posterior_policy_command_rate', POSTERIOR),
+          ('expert_command_rate', REAL)], True),
       ('Decoded hand motion (mm/s)', [
           ('policy_motion_mm_s', POLICY), ('expert_motion_mm_s', EXPERT),
+          ('posterior_motion_mm_s', POSTERIOR),
           ('real_motion_mm_s', REAL)], False),
-      ('Policy command error (rad RMS)', [('policy_command_error_rad', POLICY)], False),
+      ('Policy command error (rad RMS)', [
+          ('policy_command_error_rad', POLICY),
+          ('posterior_policy_command_error_rad', POSTERIOR)], False),
       ('Latent reward over the whole rollout', [('policy_latent_reward', POLICY)], False),
   ]
   fig, axes = plt.subplots(2, 3, figsize=(15, 8.5), constrained_layout=True)

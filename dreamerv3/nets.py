@@ -147,6 +147,9 @@ class RSSM(nj.Module):
     post = outs['logit'][None]
     dyn = self._dist(sg(post)).kl_divergence(self._dist(prior))
     rep = self._dist(post).kl_divergence(self._dist(sg(prior)))
+    # dyn_loss and rep_loss are clipped at the free-bits floor, so they can't be
+    # compared across runs with different floors. This is the raw KL.
+    metrics.update(jaxutils.tensorstats(dyn, 'kl'))
     if free:
       dyn = jnp.maximum(dyn, free)
       rep = jnp.maximum(rep, free)

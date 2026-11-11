@@ -3,16 +3,21 @@
 
 No simulator or hand is involved. For one demo episode:
   1. The world model watches the real episode up to --start.
-  2. From that state it imagines the rest twice: once with the policy choosing every action
-     (mode, as at deployment), and once replaying the expert's actions.
-  3. Both are decoded to taxel forces and positions and compared with the real episode.
+  2. From that state it imagines the rest twice (prior): once with the policy choosing every
+     action (mode, as at deployment), and once replaying the expert's actions.
+  3. Separately, the posterior keeps filtering the real episode: each step it gets the real
+     observation and the expert's previous action. The policy is queried on every posterior
+     state too, without its action being used, which shows whether the policy is jittery even
+     on real states.
+  4. All of these are decoded to taxel forces and positions and compared with the real episode.
 
 Replaying the expert's actions shows the world model's own error. Only the gap between
 the policy and that reference comes from the policy. This shows what the world model
 predicts, not what would happen on the hand.
 
 Writes to <logdir>/rollout_wm/<episode>/ unless --out is set:
-  rollout.gif    real, policy and expert-action hands side by side, coloured by ||force||
+  rollout.gif    real, posterior, prior with expert actions and prior with the policy, side by
+                 side and coloured by ||force||, with command and taxel jitter traces below
   summary.png    joint commands and error curves over time
   rollout.npz    every array behind the plots
   metrics.json   the numbers printed at the end
@@ -55,9 +60,11 @@ from rollout_leq import load_agent  # noqa: E402
 OBS_KEYS = ('forces_local', 'positions', 'reward', 'is_first', 'is_last', 'is_terminal')
 STREAMS = {
     'real': ('Real episode', 'black'),
-    'policy': ('Policy in world model', 'tab:red'),
-    'expert': ('Expert actions in world model', 'tab:blue'),
+    'posterior': ('Posterior: real obs + expert actions', 'tab:green'),
+    'expert': ('Prior: expert actions', 'tab:blue'),
+    'policy': ('Prior: policy actions', 'tab:red'),
 }
+DECODED = ('posterior', 'expert', 'policy')
 
 
 def to_numpy(tree):
@@ -198,8 +205,9 @@ def compute_curves(episode, streams, start, end):
       'real_position_step_mm': position_step(real_positions),
       'expert_action_step': np.abs(np.diff(expert_actions[:-1], axis=0)).mean(-1),
   }
-  for name in ('policy', 'expert'):
-    stream = streams[name]
+  posterior = {key: value[start:end] for key, value in streams['posterior'].items()}
+  for name in DECODED:
+    stream = posterior if name == 'posterior' else streams[name]
     curves[f'{name}_position_step_mm'] = position_step(stream['positions'])
     curves[f'{name}_force_norm'] = np.linalg.norm(stream['forces'], axis=-1).mean(-1)
     curves[f'{name}_force_rmse'] = np.sqrt(np.square(stream['forces'] - real_forces).mean((1, 2)))
@@ -211,6 +219,11 @@ def compute_curves(episode, streams, start, end):
   curves['policy_action_step'] = np.abs(np.diff(streams['policy']['action'][:-1], axis=0)).mean(-1)
   curves['policy_action_rmse_rad'] = np.sqrt(np.square(
       to_radians(streams['policy']['action'][:-1]) - to_radians(expert_actions[:-1])).mean(-1))
+  # The policy's action on each posterior state (real obs, expert history), never executed.
+  observed = posterior['policy_action']
+  curves['posterior_policy_action_step'] = np.abs(np.diff(observed[:-1], axis=0)).mean(-1)
+  curves['posterior_policy_action_rmse_rad'] = np.sqrt(np.square(
+      to_radians(observed[:-1]) - to_radians(expert_actions[:-1])).mean(-1))
   return curves
 
 
@@ -234,9 +247,12 @@ def summarize(curves, episode, start, end, hz):
       'real_final_reward': float(episode['reward'][-1]),
       'policy': stats('policy'),
       'expert_actions': stats('expert'),
+      'posterior': stats('posterior'),
       'policy_action_rmse_rad': float(curves['policy_action_rmse_rad'].mean()),
       'real_position_step_mm': float(curves['real_position_step_mm'].mean()),
       'policy_action_step': float(curves['policy_action_step'].mean()),
+      'posterior_policy_action_step': float(curves['posterior_policy_action_step'].mean()),
+      'posterior_policy_action_rmse_rad': float(curves['posterior_policy_action_rmse_rad'].mean()),
       'expert_action_step': float(curves['expert_action_step'].mean()),
   }
 
@@ -276,21 +292,25 @@ def plot_summary(path, title, episode, streams, curves, start, end, hz):
     ax.tick_params(labelsize=7)
     ax.legend(fontsize=7)
 
-  policy_label, policy_color = 'Policy', STREAMS['policy'][1]
-  expert_label, expert_color = 'Expert actions', STREAMS['expert'][1]
+  policy_label, policy_color = 'Prior, policy', STREAMS['policy'][1]
+  expert_label, expert_color = 'Prior, expert actions', STREAMS['expert'][1]
+  post_label, post_color = 'Posterior', STREAMS['posterior'][1]
   both = lambda suffix: [
+      (f'posterior_{suffix}', post_label, post_color),
       (f'policy_{suffix}', policy_label, policy_color),
       (f'expert_{suffix}', expert_label, expert_color)]
   panel(4, 0, 'Mean taxel ||force||', [
       ('real_force_norm', 'Real', 'black'), *both('force_norm')], 'Counts')
   panel(4, 1, 'Force error vs real', both('force_rmse'), 'RMSE (counts)')
   panel(4, 2, 'Taxel position error vs real', both('position_error_mm'), 'mm')
-  panel(4, 3, 'Latent reward (eq. 8)', both('latent_reward'), 'Reward')
+  panel(4, 3, 'Latent reward (eq. 8)', both('latent_reward')[1:], 'Reward')
   panel(5, 0, 'Command change per step', [
-      ('policy_action_step', policy_label, policy_color),
+      ('posterior_policy_action_step', 'Policy on posterior', post_color),
+      ('policy_action_step', 'Policy in prior', policy_color),
       ('expert_action_step', 'Expert', 'black')], 'Mean |delta| (normalised)', log=True)
   panel(5, 1, 'Policy command error', [
-      ('policy_action_rmse_rad', policy_label, policy_color)], 'RMSE (rad)')
+      ('posterior_policy_action_rmse_rad', 'Policy on posterior', post_color),
+      ('policy_action_rmse_rad', 'Policy in prior', policy_color)], 'RMSE (rad)')
   panel(5, 2, 'Predicted task reward', both('reward'), 'Reward head')
   panel(5, 3, 'Predicted continuation', both('cont'), 'Continue head')
   fig.suptitle(title, fontsize=12)
@@ -298,16 +318,18 @@ def plot_summary(path, title, episode, streams, curves, start, end, hz):
   plt.close(fig)
 
 
-def render_gif(path, title, episode, streams, start, end, hz, fps, elev, azim):
+def render_gif(path, title, episode, streams, curves, start, end, hz, fps, elev, azim):
   real_positions = episode['positions'][start:end].astype(np.float32)
   real_forces = episode['forces_local'][start:end].astype(np.float32)
   stride = max(1, round(hz / fps)) if hz else 1
   frames = range(0, end - start, stride)
   delay = int(round(1000 * stride / hz)) if hz else int(round(1000 / fps))
+  posterior = streams['posterior']
   panels = {
       'real': (real_positions, real_forces),
-      'policy': (streams['policy']['positions'], streams['policy']['forces']),
+      'posterior': (posterior['positions'][start:end], posterior['forces'][start:end]),
       'expert': (streams['expert']['positions'], streams['expert']['forces']),
+      'policy': (streams['policy']['positions'], streams['policy']['forces']),
   }
   # One colour scale and one set of axes, so the panels can be compared directly.
   vmax = max(float(np.percentile(np.linalg.norm(real_forces, axis=-1), 99.5)), 1.0)
@@ -315,10 +337,12 @@ def render_gif(path, title, episode, streams, start, end, hz, fps, elev, azim):
   low, high = np.percentile(flat, 0.1, axis=0), np.percentile(flat, 99.9, axis=0)
   center, radius = (low + high) / 2, float((high - low).max()) / 2 * 1.1
 
-  fig = plt.figure(figsize=(13, 5), dpi=80)
+  fig = plt.figure(figsize=(18, 8.5), dpi=80)
+  grid = fig.add_gridspec(2, 4, height_ratios=(2.2, 1), left=0.03, right=0.93, top=0.88,
+                          bottom=0.07, wspace=0.05, hspace=0.18)
   scatters = {}
   for i, (name, (positions, forces)) in enumerate(panels.items()):
-    ax = fig.add_subplot(1, 3, i + 1, projection='3d')
+    ax = fig.add_subplot(grid[0, i], projection='3d')
     ax.view_init(elev=elev, azim=azim)
     for axis, mid in zip('xyz', center):
       getattr(ax, f'set_{axis}lim')(mid - radius, mid + radius)
@@ -326,20 +350,52 @@ def render_gif(path, title, episode, streams, start, end, hz, fps, elev, azim):
     ax.set_xticklabels([])
     ax.set_yticklabels([])
     ax.set_zticklabels([])
-    ax.set_title(STREAMS[name][0], fontsize=11)
+    ax.set_title(STREAMS[name][0], fontsize=11, color=STREAMS[name][1])
     scatters[name] = ax.scatter(
         *positions[0].T, c=np.linalg.norm(forces[0], axis=-1), s=10,
         cmap='magma', vmin=0, vmax=vmax, depthshade=False)
-  fig.subplots_adjust(left=0, right=0.92, top=0.86, bottom=0.02, wspace=0)
-  bar = fig.add_axes([0.935, 0.15, 0.012, 0.65])
+  bar = fig.add_axes([0.945, 0.45, 0.01, 0.4])
   fig.colorbar(scatters['real'], cax=bar, label='||force|| (counts)')
   heading = fig.suptitle(title, fontsize=11)
+
+  # Jitter traces over the imagined window, with a cursor at the current frame.
+  times = (np.arange(end - start) / hz) if hz else np.arange(end - start)
+  xlabel = 'Time after start (s)' if hz else 'Step after start'
+
+  def strip(slot, name, keys, ylabel, log=False):
+    ax = fig.add_subplot(slot)
+    for key, label, color in keys:
+      series = curves[key]
+      ax.plot(times[1:len(series) + 1], series, color=color, lw=1, label=label)
+    if log:
+      ax.set_yscale('symlog', linthresh=1e-4)
+    ax.set_xlim(times[0], times[-1])
+    ax.set_title(name, fontsize=10)
+    ax.set_xlabel(xlabel, fontsize=8)
+    ax.set_ylabel(ylabel, fontsize=8)
+    ax.tick_params(labelsize=7)
+    ax.legend(fontsize=7, loc='upper right')
+    return ax.axvline(times[0], color='gray', lw=1)
+
+  cursors = [
+      strip(grid[1, 0:2], 'Command change per step (jitter)', [
+          ('expert_action_step', 'Expert', 'black'),
+          ('posterior_policy_action_step', 'Policy on posterior', STREAMS['posterior'][1]),
+          ('policy_action_step', 'Policy in prior', STREAMS['policy'][1])],
+          'Mean |delta| (normalised)', log=True),
+      strip(grid[1, 2:4], 'Decoded taxel movement per step (jitter)', [
+          ('real_position_step_mm', 'Real', 'black'),
+          *[(f'{name}_position_step_mm', STREAMS[name][0], STREAMS[name][1])
+            for name in DECODED]], 'Mean |delta| (mm)'),
+  ]
 
   images = []
   for frame in frames:
     for name, (positions, forces) in panels.items():
       scatters[name]._offsets3d = tuple(positions[frame].T)
       scatters[name].set_array(np.linalg.norm(forces[frame], axis=-1))
+    for cursor in cursors:
+      cursor.set_xdata([times[frame], times[frame]])
     clock = f'{(frame / hz):.2f} s after start' if hz else f'step {frame}'
     heading.set_text(f'{title}\n{clock}')
     fig.canvas.draw()
@@ -464,6 +520,8 @@ def main():
         real_positions=episode['positions'][args.start:end],
         real_forces=episode['forces_local'][args.start:end],
         observed_policy_action=streams['posterior']['policy_action'][args.start:end],
+        posterior_positions=streams['posterior']['positions'][args.start:end],
+        posterior_forces=streams['posterior']['forces'][args.start:end],
         **{f'{name}_{key}': streams[name][key]
            for name in ('policy', 'expert')
            for key in ('positions', 'forces', 'action')})
@@ -471,21 +529,25 @@ def main():
     plot_summary(out / 'summary.png', f'{path.name}\n{label}', episode, streams, curves,
                  args.start, end, hz)
     if not args.no_gif:
-      count = render_gif(out / 'rollout.gif', label, episode, streams, args.start, end, hz,
+      count = render_gif(out / 'rollout.gif', label, episode, streams, curves, args.start, end, hz,
                          args.fps, args.elev, args.azim)
       print(f'  GIF: {count} frames')
 
-    policy, expert = metrics['policy'], metrics['expert_actions']
-    print(f'  {"":24}{"Policy":>12}{"Expert actions":>18}')
+    policy, expert, post = metrics['policy'], metrics['expert_actions'], metrics['posterior']
+    print(f'  {"":24}{"Prior policy":>14}{"Prior expert":>14}{"Posterior":>12}')
     for key, name in (
         ('latent_reward_mean', 'Latent reward'),
         ('force_rmse_counts', 'Force RMSE (counts)'),
         ('position_error_mm', 'Position error (mm)'),
         ('position_error_mm_last_5pct', 'Same, last 5%'),
-        ('predicted_reward_last_5pct', 'Pred. reward, last 5%')):
-      print(f'  {name:<24}{policy[key]:>12.3f}{expert[key]:>18.3f}')
-    print(f'  Command error: {metrics["policy_action_rmse_rad"]:.3f} rad RMS')
-    print(f'  Command change per step: policy {metrics["policy_action_step"]:.5f}, '
+        ('predicted_reward_last_5pct', 'Pred. reward, last 5%'),
+        ('position_step_mm', 'Taxel move/step (mm)')):
+      print(f'  {name:<24}{policy[key]:>14.3f}{expert[key]:>14.3f}{post[key]:>12.3f}')
+    print(f'  Real taxel move/step: {metrics["real_position_step_mm"]:.3f} mm')
+    print(f'  Command error: policy in prior {metrics["policy_action_rmse_rad"]:.3f}, '
+          f'policy on posterior {metrics["posterior_policy_action_rmse_rad"]:.3f} rad RMS')
+    print(f'  Command change per step: policy in prior {metrics["policy_action_step"]:.5f}, '
+          f'policy on posterior {metrics["posterior_policy_action_step"]:.5f}, '
           f'expert {metrics["expert_action_step"]:.5f}')
     print(f'  Saved to {out}')
 

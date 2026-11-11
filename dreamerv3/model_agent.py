@@ -131,6 +131,9 @@ class Agent(nj.Module):
     mlp = scales.pop('dec_mlp')
     scales.update({k: cnn for k in self.dec.imgkeys})
     scales.update({k: mlp for k in self.dec.veckeys})
+    # Extra weight on the forces decoder only, on top of dec_mlp.
+    if 'forces_local' in scales:
+      scales['forces_local'] *= float(self.config.forces_loss_scale)
     self.scales = scales
 
   @property
@@ -246,7 +249,15 @@ class Agent(nj.Module):
         k: jnp.concatenate([prevact[k][:, None], data[k][:, :-1]], 1)
         for k in self.act_space}
     prevacts = jaxutils.onehot_dict(prevacts, self.act_space)
-    embed = self.enc(data)
+    enc_data = data
+    noise = float(self.config.forces_aug_noise)
+    if update and noise > 0 and 'forces_local' in data:
+      # Augmentation: noisy forces into the encoder, clean forces as the decoder's
+      # target, so the posterior has to ignore sensor noise. Training steps only;
+      # report() calls this with update=False.
+      enc_data = {**data, 'forces_local': data['forces_local'] + noise * jax.random.normal(
+          nj.seed(), data['forces_local'].shape, data['forces_local'].dtype)}
+    embed = self.enc(enc_data)
     newlat, outs = self.dyn.observe(prevlat, prevacts, embed, data['is_first'])
     rew_feat = outs if self.config.reward_grad else sg(outs)
     recon = self.dec(outs)

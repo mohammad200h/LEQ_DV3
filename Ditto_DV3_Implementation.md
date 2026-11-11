@@ -311,7 +311,7 @@ Metrics are logged under `train/`, `report/` (training successes) and `eval/` (h
 | `ditto/latent_distance` | `1 - ditto/reward` | Falls |
 | `ditto/action_mse` | Policy mode vs expert action, at the same step in the imagined rollout | About 0.005 in the full run |
 | `ditto/action_step` | Mean per-step change of the policy mode | Should approach the next row. Currently about 80× higher |
-| `ditto/expert_action_step` | Mean per-step change of expert actions | About 0.0001 |
+| `ditto/expert_action_step` | Mean per-step change of expert actions | About 0.0001 at 100 Hz, 0.001 at 10 Hz |
 | `forces_local_loss` | Frozen world-model reconstruction | About 1. **Near 10,000 means the force scale is wrong** |
 | `dyn_loss` | Frozen world-model KL | About 1.9. **Near 11 means the inputs don't match the model** |
 | `val/min`, `val/mean` | Value predictions | Positive from the start, rising to about 19.8. **Large negative values mean the value head has blown up** |
@@ -321,6 +321,7 @@ Metrics are logged under `train/`, `report/` (training successes) and `eval/` (h
 
 ## Known limits
 
+- **Command jitter.** The policy's command changes about 9× more per step than the expert's, even on real observations. A reward term `−c·Σⱼ(aₖ,ⱼ − aₖ₋₁,ⱼ)²` was tried and removed. At `c` = 10 (10 Hz, 6,000 steps, one seed) it made commands about 3× smoother but raised the command error by about 50% over whole episodes. An exponential moving average on the commands (α ≈ 0.25–0.35 at 10 Hz) gave the same smoothness with no loss of accuracy in an offline comparison. Filter the commands on the hardware instead. See [WorldModelJitter.md](WorldModelJitter.md).
 - **Horizon and jitter.** H=15 at 100 Hz is 0.15 s. Holding the first action for the whole window scores 0.9915, the same as the real expert actions at 0.9911, and action noise up to 0.01 is undetected. The reward therefore can't see motion inside a window, which likely explains the jitter. The likely fix is to train at a lower rate with `resample_chunks.py`. The 20 Hz data is built and a 300-step world-model run confirmed that it loads and trains, but no full world model or DITTO policy has been trained on it yet.
 - **No task evaluation.** `rollout_leq.py` supports squeeze and cyringe environments only, and no mechanical pen environment was found. `embodied/envs/leap.py` is a stub with zero observations. `rollout_leq_wm.sh` shows what the world model predicts, not what would happen on the hand. It has only been run on DITTO checkpoints, not LEQ.
 - **REINFORCE in 16-D.** The reward is differentiable through the frozen model, so backprop through dynamics may work better. Untested.
