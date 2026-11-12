@@ -2,7 +2,9 @@
 # Train DreamerV3 world model only (--algo model) on the mechanical pen demos.
 #
 # Data is already in DreamerV3 chunk format (no convert_episodes.py step):
-#   data/leap/mechanical_pen -> ros_ws/demonstrations/compose_playbacks/DV3
+#   data/leap/mechanical_pen -> ros_ws/demonstrations/compose_playbacks/DV3/100hz
+#   Other rates: data/leap/mechanical_pen_new10hz, _new50hz (sparsh-skin run at that rate,
+#   DV3/10hz and DV3/50hz) and mechanical_pen_<N>hz (resampled from 100 Hz).
 #
 # Usage: ./eval/mechanical_pen/train_model.sh [GPU] [SEED] [TASK] [extra main.py flags...]
 #   Writes logdir/model/<TASK>/0/<SEED>/ unless LOGDIR is set.

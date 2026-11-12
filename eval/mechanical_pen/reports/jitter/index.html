@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mechanical Pen Jitter Study</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~70ch) for prose, tables and charts break out to a wider measure. */
+:root {
+  --bg: #f6f8f8;
+  --surface: #ffffff;
+  --fg: #16201f;
+  --muted: #55625f;
+  --rule: #d5dddb;
+  --accent: #0f6b62;
+  --accent-soft: #e1efec;
+  --policy: #c2571a;
+  --expert: #44536b;
+  --real: #7d8a87;
+  --good: #2c7a3f;
+  --bad: #a33a2a;
+  --display: "Spectral", Georgia, "Times New Roman", serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111716; --surface: #18201f; --fg: #e3ebe9; --muted: #9aa9a5; --rule: #2c3836;
+    --accent: #5cc2b5; --accent-soft: #1d3330; --policy: #f0894a; --expert: #9fb2d4; --real: #8c9a97;
+    --good: #6cc382; --bad: #f08a78; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111716; --surface: #18201f; --fg: #e3ebe9; --muted: #9aa9a5; --rule: #2c3836;
+  --accent: #5cc2b5; --accent-soft: #1d3330; --policy: #f0894a; --expert: #9fb2d4; --real: #8c9a97;
+  --good: #6cc382; --bad: #f08a78; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 16px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 48px 80px;
+}
+.page { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+.prose { max-width: 70ch; }
+header { display: flex; flex-direction: column; gap: 14px; border-bottom: 1px solid var(--rule); padding-bottom: 28px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1, h2, h3 { font-family: var(--display); font-weight: 600; line-height: 1.2; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(30px, 5vw, 44px); }
+h2 { font-size: 27px; }
+h3 { font-size: 19px; font-family: var(--body); font-weight: 600; }
+p { margin: 0; }
+.lede { font-size: 18px; color: var(--muted); max-width: 66ch; }
+.meta { font-family: var(--mono); font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 22px; }
+section { display: flex; flex-direction: column; gap: 18px; }
+section > .head { display: flex; flex-direction: column; gap: 6px; }
+.tag { font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: .04em; }
+ul, ol { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
+code, .num { font-family: var(--mono); font-size: .9em; }
+code { background: var(--accent-soft); padding: 1px 5px; border-radius: 3px; word-break: break-word; }
+strong { font-weight: 600; }
+.verdict {
+  background: var(--surface); border: 1px solid var(--rule); border-left: 4px solid var(--accent);
+  padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; border-radius: 4px;
+}
+.verdict h2 { font-size: 22px; }
+.findings { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px; }
+.finding { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.finding .k { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.finding .v { font-family: var(--display); font-size: 21px; line-height: 1.25; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+th, td { padding: 8px 12px; text-align: right; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+thead th { font-weight: 600; font-size: 12.5px; color: var(--muted); vertical-align: bottom; white-space: normal; min-width: 90px; line-height: 1.35; }
+thead th:first-child { min-width: 120px; }
+tbody tr:last-child td { border-bottom: 0; }
+tr.hl td { background: var(--accent-soft); }
+td.flat { color: var(--policy); font-weight: 500; }
+.caption { font-size: 14px; color: var(--muted); max-width: 80ch; }
+.figure { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 18px 18px 12px; display: flex; flex-direction: column; gap: 10px; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 24px; }
+.chart { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.chart h3 { font-size: 15px; }
+.chart svg { width: 100%; height: auto; display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 18px; height: 3px; display: inline-block; border-radius: 2px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.status { font-family: var(--mono); font-size: 12px; padding: 1px 7px; border-radius: 10px; border: 1px solid currentColor; white-space: nowrap; }
+.status.no { color: var(--bad); }
+.status.yes { color: var(--good); }
+.status.part { color: var(--policy); }
+.ledger td { white-space: normal; text-align: left; vertical-align: top; }
+.ledger td:nth-child(3) { white-space: nowrap; }
+footer { border-top: 1px solid var(--rule); padding-top: 22px; font-size: 14px; color: var(--muted); display: flex; flex-direction: column; gap: 10px; }
+@media (max-width: 520px) { body { padding-block: 28px 56px; } .page { gap: 44px; } }
+</style>
+</head>
+<body>
+
+
+<div class="page">
+
+<header>
+  <div class="eyebrow">LEAP + Xela · mechanical pen · DreamerV3 world model + DITTO</div>
+  <h1>Mechanical Pen Jitter Study</h1>
+  <p class="lede">Every experiment run so far on why the world model's imagined hand and the DITTO policy's commands are jerky on the mechanical-pen demos: control rate, data processing, posterior sharpness, a smoothness penalty, and a fully cleaned synthetic dataset.</p>
+  <div class="meta"><span>Runs: 29 Oct – 12 Nov 2026</span><span>Training: 50k steps per stage unless noted</span><span>Hardware: 2 × RTX 4090</span></div>
+</header>
+
+<div class="verdict">
+  <h2>Main result</h2>
+  <p class="prose">On real observations, the policy moves its command by about <strong class="num">0.008</strong> normalised units (about <strong class="num">0.016 rad</strong>) at every decision. That number does not change with the control rate (10–100 Hz), with how the data was processed, with how sharp the world model's posterior is, or with perfectly clean synthetic data. Only a smoothness penalty in the DITTO reward lowered it, and that cost accuracy. The decoded world-model hand behaves the same way: it adds about <strong class="num">0.3 mm</strong> of motion per step at every rate. Because the noise is a fixed amount per decision, jitter per second grows in direct proportion to the rate.</p>
+  <div class="findings">
+    <div class="finding"><span class="k">Ruled out</span><span class="v">Data quality and preprocessing</span><p class="caption">Resampled vs. Sparsh-at-rate data and clean synthetic data all give the same per-step jitter.</p></div>
+    <div class="finding"><span class="k">Ruled out</span><span class="v">Posterior sharpness alone</span><p class="caption">A posterior with ~30% fewer likely classes halved command error but left jitter unchanged.</p></div>
+    <div class="finding"><span class="k">Still open</span><span class="v">Sampling of <code>z</code> vs. the actor</span><p class="caption">Most-likely <code>z</code> cuts decoded hand jitter by 60%. The same test on the policy hasn't been run.</p></div>
+  </div>
+</div>
+
+<section>
+  <div class="head"><span class="tag">Background</span><h2>Setup and how jitter is measured</h2></div>
+  <div class="prose" style="display:flex;flex-direction:column;gap:12px">
+    <p>Demonstrations are 564 labelled “Play on hand” recordings of the thumb clicking a mechanical pen. They are processed with Sparsh-skin (Xela forces, FK taxel positions, 16 joint commands as actions) and converted to DreamerV3 chunks. A world model (<code>--algo model</code>) is trained on forces and positions, then DITTO is trained on the frozen world model with the successful demos as the expert. 10% of episodes are held out.</p>
+    <p>Each trained policy is evaluated with <code>rollout_leq_wm.py</code> on 3 held-out successes, starting 0.8 s into the episode. The rollout takes the mode of the policy and of the decoder. It produces three streams:</p>
+    <ul>
+      <li><strong>Posterior:</strong> the world model filters the real episode, and the policy is queried at each real state. This is closest to deployment on the hand.</li>
+      <li><strong>Prior, expert actions:</strong> the world model imagines the rest of the episode under the expert's commands. This isolates the world model's own error.</li>
+      <li><strong>Prior, policy:</strong> the policy acts inside the world model's imagination.</li>
+    </ul>
+    <p>Metrics used throughout:</p>
+    <ul>
+      <li><strong>Command change per step:</strong> mean |a<sub>t</sub> − a<sub>t−1</sub>| over the 16 joints, in normalised action units ([−1.5, 2.5] rad mapped to [−1, 1], so 1 unit = 2 rad).</li>
+      <li><strong>Jitter ratio (× expert):</strong> the policy's command change per second divided by the expert's. This is the same as the per-step ratio.</li>
+      <li><strong>Hand motion (× real):</strong> decoded fingertip-taxel movement per step divided by the real movement per step.</li>
+      <li><strong>Command error:</strong> RMS difference between the policy's and the expert's commands, in rad.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="head"><span class="tag">Across all experiments</span><h2>The jitter is a fixed amount per decision</h2></div>
+  <p class="prose">The left chart plots command change per step on a log scale, against the data rate. The expert's per-step change falls as 1/rate, because the same motion is split over more steps. The policy's stays at about 0.008 in every experiment. The right chart shows the same pattern for the decoded hand. Its motion per step stays at 0.27–0.45 mm while the real hand's falls from 0.26 to 0.027 mm.</p>
+  <div class="figure">
+    <div class="charts">
+      <div class="chart"><h3>Command change per step (normalised, log scale)</h3><svg id="c1" viewBox="0 0 460 300" role="img" aria-label="Policy command change per step stays near 0.008 at every rate while the expert's falls from 0.0014 to 0.00015"></svg></div>
+      <div class="chart"><h3>Hand motion per step, mm (log scale)</h3><svg id="c2" viewBox="0 0 460 300" role="img" aria-label="Decoded hand motion per step stays near 0.3 mm while the real hand's falls from 0.26 to 0.027 mm"></svg></div>
+    </div>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--policy)"></i>Policy on posterior (left) / decoded hand (right)</span>
+      <span><i class="dot" style="background:var(--expert)"></i>Expert / real hand</span>
+      <span>● rate sweep &nbsp; ■ data sweep (3-seed mean) &nbsp; ◆ synthetic 30 Hz (3-seed mean)</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="head"><span class="tag">Experiment 1 · 10 Nov · seed 0 · data resampled from 100 Hz</span><h2>Control-rate sweep</h2></div>
+  <p class="prose">Five world models and DITTO policies, one per rate, all trained from the 100 Hz Sparsh-skin data resampled to the target rate. The DITTO horizon is 15 steps at every rate, so it covers 1.5 s at 10 Hz and 0.15 s at 100 Hz.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Rate</th><th>Policy change / step (posterior)</th><th>Policy change / s (posterior)</th><th>Policy change / s (prior)</th><th>Expert change / s</th><th>Command error, posterior (rad)</th><th>Command error, prior (rad)</th><th>Decoded hand, expert actions (mm/s)</th><th>Real hand (mm/s)</th><th>Position error, expert actions (mm)</th></tr></thead>
+    <tbody>
+      <tr><td>10 Hz</td><td class="flat">0.0084</td><td>0.084</td><td>0.086</td><td>0.0144</td><td>0.153</td><td>0.182</td><td>4.5</td><td>2.6</td><td>1.55</td></tr>
+      <tr><td>20 Hz</td><td class="flat">0.0080</td><td>0.159</td><td>0.164</td><td>0.0145</td><td>0.117</td><td>0.165</td><td>6.9</td><td>2.7</td><td>1.68</td></tr>
+      <tr><td>50 Hz</td><td class="flat">0.0087</td><td>0.434</td><td>0.461</td><td>0.0145</td><td>0.121</td><td>0.211</td><td>13.8</td><td>2.7</td><td>1.73</td></tr>
+      <tr><td>80 Hz</td><td class="flat">0.0086</td><td>0.691</td><td>0.689</td><td>0.0145</td><td>0.133</td><td>0.224</td><td>23.6</td><td>2.7</td><td>2.07</td></tr>
+      <tr><td>100 Hz</td><td class="flat">0.0080</td><td>0.802</td><td>1.127</td><td>0.0145</td><td>0.104</td><td>0.428</td><td>29.3</td><td>2.7</td><td>2.12</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="prose">
+    <li>Per-step jitter is flat (0.0080–0.0087), so jitter per second grows about 10× from 10 to 100 Hz: 6× the expert at 10 Hz, 55× at 100 Hz.</li>
+    <li>On real observations, command error stays between 0.10 and 0.15 rad at every rate. In imagination it grows with the rate (0.43 rad at 100 Hz), because errors compound over more steps.</li>
+    <li>The decoded hand moves 0.29–0.45 mm per step at every rate, against 2.7 mm/s for the real hand. Lower rates track the real hand slightly better (1.55 mm vs 2.12 mm).</li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><span class="tag">Experiment 2 · 11 Nov · 3 seeds</span><h2>Data-processing sweep</h2></div>
+  <p class="prose">This tests whether resampling the 100 Hz Sparsh-skin output causes the jitter. “Old” datasets are resampled from 100 Hz. “New” datasets run Sparsh-skin directly at the target rate, with the Xela samples dropped (not interpolated) when the source is faster. Every run uses the same settings, so only the data differs.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Dataset</th><th>Rate</th><th>Policy change / step (posterior)</th><th>Policy jitter, posterior (× expert)</th><th>Policy jitter, prior (× expert)</th><th>Decoded hand, expert actions (× real)</th><th>Decoded hand, posterior (× real)</th><th>Command error, posterior (rad)</th><th>Position error, expert actions (mm)</th><th>Forces recon, held-out</th></tr></thead>
+    <tbody>
+      <tr><td>old10hz</td><td>10</td><td class="flat">0.0078</td><td>5.40 ± 0.19</td><td>5.59 ± 0.27</td><td>1.70 ± 0.03</td><td>1.70 ± 0.03</td><td>0.120 ± 0.008</td><td>1.31 ± 0.12</td><td>4.09 ± 0.03</td></tr>
+      <tr><td>new10hz</td><td>10</td><td class="flat">0.0080</td><td>5.52 ± 0.11</td><td>5.90 ± 0.24</td><td>1.74 ± 0.02</td><td>1.71 ± 0.02</td><td>0.123 ± 0.016</td><td>1.31 ± 0.07</td><td>4.10 ± 0.01</td></tr>
+      <tr><td>old50hz</td><td>50</td><td class="flat">0.0083</td><td>28.82 ± 0.27</td><td>30.62 ± 2.10</td><td>4.96 ± 0.28</td><td>5.13 ± 0.08</td><td>0.122 ± 0.027</td><td>1.31 ± 0.03</td><td>3.86 ± 0.05</td></tr>
+      <tr><td>new50hz</td><td>50</td><td class="flat">0.0084</td><td>28.84 ± 1.33</td><td>31.88 ± 2.01</td><td>4.92 ± 0.21</td><td>5.09 ± 0.17</td><td>0.114 ± 0.010</td><td>1.34 ± 0.05</td><td>3.84 ± 0.10</td></tr>
+      <tr><td>new100hz</td><td>100</td><td class="flat">0.0082</td><td>56.37 ± 1.03</td><td>65.15 ± 7.36</td><td>9.74 ± 0.40</td><td>9.98 ± 0.45</td><td>0.130 ± 0.006</td><td>1.47 ± 0.15</td><td>4.07 ± 0.03</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Mean ± standard deviation over seeds 0, 1, 2.</p>
+  <ul class="prose">
+    <li>Old and new processing are indistinguishable at 10 and 50 Hz: every difference is within the seed spread.</li>
+    <li>“Decoded hand, posterior” equals “decoded hand, expert actions”. So the decoded jitter is already there when the world model only watches real sensors; imagination adds nothing measurable.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><span class="tag">Experiment 3 · 10–11 Nov · 10 Hz · 9 settings at seed 0, 4 settings at 3 seeds</span><h2>Posterior-certainty sweep</h2></div>
+  <p class="prose">On held-out data, the posterior keeps about 5 equally likely classes out of 16 per latent variable, barely fewer than the prior. So every draw of <code>z</code> is close to random. This sweep tried to sharpen it in three ways, alone and combined: lower <code>rep</code> (0.1 → 0.01), lower free bits (1.0 → 0.1 or 0), and a 3× forces decoder loss, plain, with weight decay 0.1, or with input noise.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Setting (3 seeds)</th><th>Posterior classes / var, held-out</th><th>Prior classes / var, held-out</th><th>Forces recon, held-out</th><th>Held-out / training forces</th><th>DITTO held-out reward</th><th>Policy change / step (posterior)</th><th>Command error, posterior (rad)</th></tr></thead>
+    <tbody>
+      <tr><td>baseline</td><td>5.09 ± 0.06</td><td>5.64 ± 0.04</td><td>4.09 ± 0.03</td><td>5.29 ± 0.08</td><td>0.954 ± 0.001</td><td class="flat">0.0078 ± 0.0003</td><td>0.120 ± 0.008</td></tr>
+      <tr class="hl"><td>rep0.01</td><td>3.53 ± 0.46</td><td>3.82 ± 0.46</td><td>3.72 ± 0.06</td><td>3.18 ± 0.16</td><td>0.952 ± 0.002</td><td class="flat">0.0077 ± 0.0003</td><td>0.051 ± 0.003</td></tr>
+      <tr><td>forces3_wd</td><td>5.54 ± 0.05</td><td>6.22 ± 0.09</td><td>3.42 ± 0.07</td><td>4.85 ± 0.09</td><td>0.952 ± 0.006</td><td class="flat">0.0077 ± 0.0006</td><td>0.058 ± 0.013</td></tr>
+      <tr><td>all</td><td>4.26 ± 0.19</td><td>4.87 ± 0.27</td><td>3.44 ± 0.08</td><td>4.58 ± 0.11</td><td>0.946 ± 0.004</td><td class="flat">0.0071 ± 0.0005</td><td>0.050 ± 0.012</td></tr>
+    </tbody>
+  </table></div>
+  <details class="prose">
+    <summary style="cursor:pointer;color:var(--accent)">The other five settings, seed 0 only</summary>
+    <div class="table-wrap" style="margin-top:12px"><table>
+      <thead><tr><th>Setting</th><th>Posterior classes / var</th><th>Forces recon, held-out</th><th>Policy change / step</th><th>Command error (rad)</th></tr></thead>
+      <tbody>
+        <tr><td>free0.1</td><td>5.20</td><td>4.52</td><td>0.0078</td><td>0.130</td></tr>
+        <tr><td>free0</td><td>5.02</td><td>4.69</td><td>0.0076</td><td>0.121</td></tr>
+        <tr><td>free0.1_rep0.01</td><td>4.18</td><td>3.80</td><td>0.0088</td><td>0.051</td></tr>
+        <tr><td>forces3</td><td>5.11</td><td>3.40</td><td>0.0078</td><td>0.081</td></tr>
+        <tr><td>forces3_noise</td><td>5.45</td><td>4.04</td><td>0.0074</td><td>0.102</td></tr>
+      </tbody>
+    </table></div>
+  </details>
+  <ul class="prose">
+    <li><code>rep0.01</code> made the posterior about 30% sharper (5.1 → 3.5 classes per variable), shrank the held-out/training forces gap from 5.3× to 3.2×, and cut command error by more than half (0.120 → 0.051 rad).</li>
+    <li>Command change per step did not move in any setting (0.0071–0.0088). Sharper latents made the policy more accurate, not smoother.</li>
+    <li>Lowering free bits alone changed almost nothing.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><span class="tag">Experiment 4 · 29 Oct · 10 Hz · seed 0 · 6k DITTO steps</span><h2>Smoothness penalty in the DITTO reward</h2></div>
+  <p class="prose">DITTO's reward was given a penalty <code>c · |a<sub>t</sub> − a<sub>t−1</sub>|²</code> with <code>c = 10</code> (<code>--ditto_smooth</code>). Both runs used the rate-sweep 10 Hz world model and a short 6k-step DITTO schedule, so their absolute values are not comparable with the 50k-step runs.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>DITTO</th><th>Policy change / step, posterior</th><th>Policy change / step, prior</th><th>Expert change / step</th><th>Command error, posterior (rad)</th><th>Command error, prior (rad)</th></tr></thead>
+    <tbody>
+      <tr><td>Penalty off</td><td>0.0123</td><td>0.0128</td><td>0.0014</td><td>0.128</td><td>0.183</td></tr>
+      <tr class="hl"><td>Penalty on</td><td>0.0046</td><td>0.0038</td><td>0.0014</td><td>0.159</td><td>0.201</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="prose">
+    <li>This is the only change in any experiment that lowered the per-step jitter, by about 2.7× on real observations.</li>
+    <li>It cost accuracy: command error rose by 24% on real observations. The penalty was removed afterwards, because a low-pass command filter gave similar smoothness without that cost.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><span class="tag">Experiment 5 · world model only · 100 Hz · 1 held-out episode, 600 steps</span><h2>Random vs. most-likely <code>z</code> when decoding</h2></div>
+  <p class="prose">The world model was fed the expert's actions, and the latent was chosen in four ways: a random or a fixed one of the 7 prior heads, combined with a random draw or the most likely class of <code>z</code>.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Latent setting</th><th>Hand step (mm/step)</th><th>Force step (/step)</th><th>High-frequency position jitter (mm)</th><th>Position error vs real (mm)</th></tr></thead>
+    <tbody>
+      <tr><td>Real episode</td><td>0.055</td><td>0.27</td><td>0.005</td><td>–</td></tr>
+      <tr><td>Random head, random <code>z</code> (current)</td><td>0.363</td><td>1.15</td><td>0.112</td><td>1.9</td></tr>
+      <tr><td>Fixed head, random <code>z</code></td><td>0.353</td><td>1.15</td><td>0.111</td><td>1.9</td></tr>
+      <tr class="hl"><td>Random head, most likely <code>z</code></td><td>0.153</td><td>0.48</td><td>0.043</td><td>2.7</td></tr>
+      <tr><td>Fixed head, most likely <code>z</code></td><td>0.143</td><td>0.43</td><td>0.039</td><td>3.5</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="prose">
+    <li>Drawing <code>z</code> at random is the main source of the decoded hand's jitter: the most likely class removes about 60% of it. Switching between ensemble heads adds only about 3%.</li>
+    <li>The most likely <code>z</code> drifts further from the real path (2.7 vs 1.9 mm), so it is a viewing aid, not a better model.</li>
+    <li>The equivalent test for the policy (most likely <code>z</code> on the posterior) has not been run. It would settle whether the command jitter comes from <code>z</code> or from the actor.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><span class="tag">Experiment 6 · 11–12 Nov · 30 Hz · 3 seeds</span><h2>Clean synthetic data at 30 Hz</h2></div>
+  <div class="prose" style="display:flex;flex-direction:column;gap:12px">
+    <p>Analysing the raw recordings found two flaws in every real dataset. First, joint state is recorded at only about 10 Hz (commands at 30 Hz, Xela at 100 Hz), so the processing curve-fits the joints. Second, commands go out with jittery timing (11–56 ms gaps), so holding the last command on a fixed 30 Hz grid repeats 13–17% of steps and skips 12–15%. That makes the actions 2–3× jerkier than the commands as sent.</p>
+    <p>To remove both, <code>synthetic_data.py</code> rebuilds every episode on an exact 30 Hz grid:</p>
+    <ul>
+      <li><strong>Actions:</strong> the recorded commands interpolated over time, then smoothed with a 50 ms Gaussian. They differ from the raw commands by about 0.0005 rad on average.</li>
+      <li><strong>Joints and taxel positions:</strong> those actions replayed in a headless MuJoCo with the same model and actuators as <code>mujoco_sim_node</code>. The hand settles for 1 s at the first action, the target ramps between steps, and collisions are off because the scene has no pen.</li>
+      <li><strong>Forces:</strong> the real Xela sample nearest each step.</li>
+    </ul>
+    <p>On the data itself, action jerk fell 6× and the worst single-step change fell from 0.53 to 0.06 rad. The world model and DITTO were trained with the standard settings.</p>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Dataset</th><th>Rate</th><th>Policy change / step (posterior)</th><th>Policy jitter, posterior (× expert)</th><th>Policy jitter, prior (× expert)</th><th>Decoded hand, expert actions (× real)</th><th>Decoded hand, posterior (× real)</th><th>Command error, posterior (rad)</th><th>Position error, expert actions (mm)</th><th>Forces recon, held-out</th></tr></thead>
+    <tbody>
+      <tr><td>new10hz</td><td>10</td><td class="flat">0.0080</td><td>5.52 ± 0.11</td><td>5.90 ± 0.24</td><td>1.74 ± 0.02</td><td>1.71 ± 0.02</td><td>0.123 ± 0.016</td><td>1.31 ± 0.07</td><td>4.10 ± 0.01</td></tr>
+      <tr class="hl"><td>synth30hz</td><td>30</td><td class="flat">0.0076</td><td>15.82 ± 1.02</td><td>16.85 ± 1.89</td><td>3.47 ± 0.13</td><td>3.40 ± 0.06</td><td>0.084 ± 0.036</td><td>1.51 ± 0.08</td><td>3.78 ± 0.06</td></tr>
+      <tr><td>new50hz</td><td>50</td><td class="flat">0.0084</td><td>28.84 ± 1.33</td><td>31.88 ± 2.01</td><td>4.92 ± 0.21</td><td>5.09 ± 0.17</td><td>0.114 ± 0.010</td><td>1.34 ± 0.05</td><td>3.84 ± 0.10</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="prose">
+    <li>Synthetic 30 Hz lands exactly on the line of the real datasets: 0.0076 per step, and its decoded hand moves 0.29 mm per step. Clean data did not reduce the model's jitter at all.</li>
+    <li>The rollout scores synthetic runs against the smoothed synthetic expert, so the ratios are measured against the smoothest reference possible. Its lower command error (0.084 rad) is partly because a smooth expert is easier to match, and it varies more between seeds.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><span class="tag">Summary</span><h2>What each test says about the cause</h2></div>
+  <div class="table-wrap"><table class="ledger">
+    <thead><tr><th>Candidate cause</th><th>Test</th><th>Verdict</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>Control rate</td><td>Exp. 1</td><td><span class="status part">Scales it</span></td><td>Sets how many jittery decisions happen per second. Per-step jitter doesn't change.</td></tr>
+      <tr><td>Resampling in preprocessing</td><td>Exp. 2</td><td><span class="status no">Not the cause</span></td><td>Old and new processing are within the seed spread.</td></tr>
+      <tr><td>Stuttering actions / curve-fitted joints in the data</td><td>Exp. 6</td><td><span class="status no">Not the cause</span></td><td>Clean synthetic data gives 0.0076 per step, the same as raw data.</td></tr>
+      <tr><td>Wide posterior over <code>z</code></td><td>Exp. 3</td><td><span class="status no">Not by itself</span></td><td>A 30% sharper posterior halves the error but leaves per-step jitter unchanged.</td></tr>
+      <tr><td>Imagination (prior) noise</td><td>Exp. 1, 2</td><td><span class="status no">Not for commands</span></td><td>The policy on real observations is almost as jerky as in imagination.</td></tr>
+      <tr><td>Random draws of <code>z</code> when decoding</td><td>Exp. 5</td><td><span class="status yes">Main cause of hand jitter</span></td><td>The most likely <code>z</code> removes about 60% of the decoded hand's jitter.</td></tr>
+      <tr><td>Nothing in DITTO rewards smooth commands</td><td>Exp. 4</td><td><span class="status yes">Contributes</span></td><td>A smoothness penalty cuts jitter 2.7×, at a 24% accuracy cost.</td></tr>
+      <tr><td>Random <code>z</code> fed to the actor</td><td>Not run</td><td><span class="status part">Open</span></td><td>Needs the most-likely-<code>z</code> posterior test on a trained policy.</td></tr>
+      <tr><td>Chained ensemble prior heads (<code>PossibleBug.md</code>)</td><td>Not run</td><td><span class="status part">Open</span></td><td>Head switching adds only about 3% to decoded jitter, but the bug also affects the uncertainty penalty. It needs a world-model retrain.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <div class="head"><span class="tag">Next steps</span><h2>Recommended next tests</h2></div>
+  <ol class="prose">
+    <li><strong>Most-likely <code>z</code> on the posterior</strong> for an existing DITTO checkpoint (no retraining). If the commands become smooth, the jitter comes from <code>z</code>: give the actor <code>z</code>'s probabilities or <code>h</code> alone. If they stay jerky, it's the actor.</li>
+    <li><strong>A behaviour-cloning term</strong> in DITTO that pulls the actor toward the expert's smooth actions on real states. Unlike the smoothness penalty, this rewards smoothness and accuracy together.</li>
+    <li><strong>Give the actor its previous command,</strong> or have it output a change in the command, so holding still becomes the easy default.</li>
+    <li><strong>Combine <code>rep0.01</code> with the winner of tests 1–3.</strong> It is the best accuracy lever found so far.</li>
+    <li><strong>On the hardware, low-pass or rate-limit the commands regardless.</strong> At 10 Hz the policy jitters 5.5× the expert's rate; each doubling of the rate doubles that.</li>
+  </ol>
+</section>
+
+<footer>
+  <p>Results on disk, under <code>LEQ_DV3/logdir/</code>: <code>rate_sweep/</code>, <code>data_sweep/</code>, <code>posterior_sweep_10hz*/</code>, <code>posterior_seeds_10hz/</code>, <code>smooth_test/</code>, <code>synthetic_30hz/</code>. Each has rollout GIFs per held-out episode and a <code>summary.md</code> where one exists.</p>
+  <p>Synthetic data: <code>ros_ws/demonstrations/compose_playbacks/synthetic_data_30hz/</code>, built by <code>mechanical_pen_data_collection.synthetic_data</code>. Background notes: <code>LEQ_DV3/WorldModelJitter.md</code>, <code>eval/mechanical_pen/PossibleBug.md</code>.</p>
+</footer>
+</div>
+
+<script>
+(function () {
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  // [rate, value, kind]  kind: r = rate sweep, d = data sweep mean, s = synthetic mean
+  const D = {
+    c1: {
+      policy: [[10,.0084,'r'],[20,.0080,'r'],[50,.0087,'r'],[80,.0086,'r'],[100,.0080,'r'],
+               [10,.0078,'d'],[10,.0080,'d'],[50,.0083,'d'],[50,.0084,'d'],[100,.0082,'d'],[30,.0076,'s']],
+      ref:    [[10,.00144,'r'],[20,.000725,'r'],[50,.00029,'r'],[80,.000181,'r'],[100,.000145,'r'],[30,.00048,'s']],
+      y: [1e-4, 3e-2], ticks: [1e-4, 1e-3, 1e-2], fmt: v => v >= 1e-2 ? '0.01' : v >= 1e-3 ? '0.001' : '0.0001'
+    },
+    c2: {
+      policy: [[10,.45,'r'],[20,.35,'r'],[50,.28,'r'],[80,.30,'r'],[100,.29,'r'],
+               [10,.454,'d'],[50,.272,'d'],[100,.267,'d'],[30,.290,'s']],
+      ref:    [[10,.264,'r'],[20,.133,'r'],[50,.0535,'r'],[80,.0334,'r'],[100,.0268,'r'],[30,.0854,'s']],
+      y: [0.02, 1], ticks: [0.02, 0.05, 0.1, 0.2, 0.5, 1], fmt: v => String(v)
+    }
+  };
+  const W = 460, H = 300, L = 58, R = 14, T = 14, B = 42;
+  const xs = [10, 20, 30, 50, 80, 100];
+  const lx = v => L + (Math.log(v) - Math.log(10)) / (Math.log(100) - Math.log(10)) * (W - L - R);
+  function draw(id) {
+    const d = D[id], svg = document.getElementById(id);
+    const ly = v => T + (1 - (Math.log(v) - Math.log(d.y[0])) / (Math.log(d.y[1]) - Math.log(d.y[0]))) * (H - T - B);
+    const pc = css('--policy'), ec = css('--expert'), mc = css('--muted'), rc = css('--rule');
+    let s = '';
+    d.ticks.forEach(t => {
+      s += `<line x1="${L}" x2="${W - R}" y1="${ly(t)}" y2="${ly(t)}" stroke="${rc}" stroke-width="1"/>`;
+      s += `<text x="${L - 8}" y="${ly(t) + 4}" text-anchor="end" font-size="11" fill="${mc}" font-family="IBM Plex Mono, monospace">${d.fmt(t)}</text>`;
+    });
+    xs.forEach(x => {
+      s += `<text x="${lx(x)}" y="${H - B + 18}" text-anchor="middle" font-size="11" fill="${mc}" font-family="IBM Plex Mono, monospace">${x}</text>`;
+    });
+    s += `<text x="${(L + W - R) / 2}" y="${H - 6}" text-anchor="middle" font-size="12" fill="${mc}">Data rate (Hz, log scale)</text>`;
+    const line = (pts, c, dash) => {
+      const p = pts.filter(q => q[2] === 'r').sort((a, b) => a[0] - b[0]);
+      return `<polyline fill="none" stroke="${c}" stroke-width="2" ${dash ? 'stroke-dasharray="5 4"' : ''} points="${p.map(q => lx(q[0]) + ',' + ly(q[1])).join(' ')}"/>`;
+    };
+    s += line(d.ref, ec, true) + line(d.policy, pc, false);
+    const mark = (q, c) => {
+      const x = lx(q[0]), y = ly(q[1]);
+      if (q[2] === 'r') return `<circle cx="${x}" cy="${y}" r="4" fill="${c}"/>`;
+      if (q[2] === 'd') return `<rect x="${x - 4}" y="${y - 4}" width="8" height="8" fill="none" stroke="${c}" stroke-width="1.6"/>`;
+      return `<path d="M${x} ${y - 6.5}L${x + 6.5} ${y}L${x} ${y + 6.5}L${x - 6.5} ${y}Z" fill="${c}"/>`;
+    };
+    d.ref.forEach(q => s += mark(q, ec));
+    d.policy.forEach(q => s += mark(q, pc));
+    svg.innerHTML = s;
+  }
+  const all = () => { draw('c1'); draw('c2'); };
+  all();
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    mq.addEventListener && mq.addEventListener('change', all);
+  }
+  new MutationObserver(all).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+})();
+</script>
+
+</body>
+</html>
