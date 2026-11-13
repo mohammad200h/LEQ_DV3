@@ -49,6 +49,15 @@ if [ ! -f "$MODEL_CHECKPOINT" ]; then
   exit 1
 fi
 
+# Build the same ensemble prior heads as the world model, or its checkpoint won't load.
+# Configs written before dyn.rssm.independent_heads existed mean the old chained heads.
+INDEPENDENT_HEADS=$(python3 -c '
+import sys, yaml
+cfg = yaml.safe_load(open(sys.argv[1]))
+print(bool(cfg.get("dyn", {}).get("rssm", {}).get("independent_heads", False)))
+' "$(dirname "$MODEL_CHECKPOINT")/config.yaml")
+echo "dyn.rssm.independent_heads=$INDEPENDENT_HEADS (from the world-model checkpoint)"
+
 if command -v nvidia-smi >/dev/null 2>&1; then
   read -r GPU_USED GPU_TOTAL <<< "$(nvidia-smi --query-gpu=memory.used,memory.total \
     --format=csv,noheader,nounits -i "$GPU" | head -1 | tr ',' ' ')"
@@ -71,6 +80,7 @@ CUDA_VISIBLE_DEVICES=$GPU \
     --seed "$SEED" \
     --expectile "$EXPECTILE" \
     --run.model_checkpoint "$MODEL_CHECKPOINT" \
+    --dyn.rssm.independent_heads "$INDEPENDENT_HEADS" \
     --loss_scales.reward 1.0 \
     --loss_scales.actor 1.0 \
     --loss_scales.critic 1.0 \

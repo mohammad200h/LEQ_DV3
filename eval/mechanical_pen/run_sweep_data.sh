@@ -23,6 +23,8 @@
 #   START_SECONDS=0.8         Real time observed before imagining.
 #   SWEEP_DIR=logdir/data_sweep
 #   WANDB_ENABLE=True         Runs are named data_sweep_<label>_s<seed>_{model,ditto}.
+#   RUN_TAG=""                Added to the W&B names: data_sweep_<tag>_<label>_s<seed>_...
+#                             DITTO copies dyn.rssm.independent_heads from the world model.
 #
 # Time: about 40 minutes per run on an RTX 4090 at 50k steps, so about 4.5 hours for the
 # default 12 runs on two GPUs.
@@ -53,6 +55,8 @@ EPISODES=${EPISODES:-3}
 START_SECONDS=${START_SECONDS:-0.8}
 SWEEP_DIR=${SWEEP_DIR:-logdir/data_sweep}
 export WANDB_ENABLE=${WANDB_ENABLE:-True}
+RUN_TAG=${RUN_TAG:-}
+NAME_PREFIX="data_sweep_${RUN_TAG:+${RUN_TAG}_}"
 
 cd "$(dirname "$0")/../.."
 mkdir -p "$SWEEP_DIR"
@@ -100,7 +104,7 @@ run_one() {
 
   if [ ! -f "$dir/model/done" ]; then
     log "$tag: training world model on GPU $gpu ($task)"
-    if ! LOGDIR="$dir/model" WANDB_NAME="data_sweep_${label}_s${seed}_model" \
+    if ! LOGDIR="$dir/model" WANDB_NAME="${NAME_PREFIX}${label}_s${seed}_model" \
         ./eval/mechanical_pen/train_model.sh "$gpu" "$seed" "$task" "${schedule[@]}" \
         "${wm_flags[@]+"${wm_flags[@]}"}" > "$dir/model.log" 2>&1; then
       log "$tag: world model FAILED, see $dir/model.log"
@@ -112,7 +116,7 @@ run_one() {
   if [ ! -f "$dir/ditto/done" ]; then
     log "$tag: training DITTO on GPU $gpu"
     if ! LOGDIR="$dir/ditto" MODEL_CHECKPOINT="$dir/model/checkpoint.ckpt" \
-        WANDB_NAME="data_sweep_${label}_s${seed}_ditto" \
+        WANDB_NAME="${NAME_PREFIX}${label}_s${seed}_ditto" \
         ./eval/mechanical_pen/train_ditto.sh "$gpu" "$seed" "$task" "${schedule[@]}" \
         > "$dir/ditto.log" 2>&1; then
       log "$tag: DITTO FAILED, see $dir/ditto.log"

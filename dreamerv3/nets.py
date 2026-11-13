@@ -34,6 +34,9 @@ class RSSM(nj.Module):
   block_fans: bool = False
   block_norm: bool = False
   ensemble: int = 1
+  # True: every ensemble prior head reads feat. False keeps the old chained heads
+  # (head j reads head j-1's last hidden layer) so old checkpoints still load.
+  independent_heads: bool = False
   markov: bool = False
   actless: bool = False
 
@@ -164,7 +167,9 @@ class RSSM(nj.Module):
     x = feat
     if self.ensemble > 1:
       logits = []
-      for j in range(self.ensemble): 
+      for j in range(self.ensemble):
+        if self.independent_heads:
+          x = feat
         for i in range(self.imglayers):
           x = self.get(f'img{i}_{j}', Linear, self.hidden, **kw)(x)
         logit = self._logit(f'imglogit_{j}', x)
